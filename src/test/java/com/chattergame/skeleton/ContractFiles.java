@@ -8,12 +8,12 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /** Чтение зафиксированных контрактов из classpath. */
-final class ContractFiles {
+public final class ContractFiles {
 
     private ContractFiles() {
     }
 
-    static Set<String> expectedTables() {
+    public static Set<String> expectedTables() {
         Set<String> tables = new LinkedHashSet<>();
         for (String line : read("/contract/expected-tables.txt").lines().toList()) {
             if (!line.isBlank()) {
@@ -23,19 +23,19 @@ final class ContractFiles {
         return tables;
     }
 
-    static String openApi() {
+    public static String openApi() {
         return read("/openapi/openapi.yaml");
     }
 
-    static String openApiSnapshot() {
+    public static String openApiSnapshot() {
         return read("/contract/openapi.snapshot.yaml");
     }
 
-    static String eventSchema() {
+    public static String eventSchema() {
         return read("/contract/events.schema.json");
     }
 
-    static String eventSchemaSnapshot() {
+    public static String eventSchemaSnapshot() {
         return read("/contract/events.schema.snapshot.json");
     }
 

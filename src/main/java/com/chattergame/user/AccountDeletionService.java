@@ -1,6 +1,6 @@
 package com.chattergame.user;
 
-import com.chattergame.game.GameArchiveService;
+import com.chattergame.game.GameMutationService;
 import com.chattergame.llm.LlmCredentialService;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
@@ -31,7 +31,7 @@ public class AccountDeletionService {
     private final UserSessionRepository sessions;
     private final PasswordResetTokenRepository resetTokens;
     private final LlmCredentialService credentials;
-    private final GameArchiveService games;
+    private final GameMutationService games;
     private final PasswordHasher passwordHasher;
 
     public AccountDeletionService(
@@ -40,7 +40,7 @@ public class AccountDeletionService {
             UserSessionRepository sessions,
             PasswordResetTokenRepository resetTokens,
             LlmCredentialService credentials,
-            GameArchiveService games,
+            GameMutationService games,
             PasswordHasher passwordHasher) {
         this.users = users;
         this.identities = identities;

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chattergame.local/contract/events.schema.json",
   "title": "Игровое событие",
-  "description": "Конверт события реалтайма и журнала. На E01 фиксируются только тип сообщения, тип события и запрет на текст в мета-канале (D-031, D-035).",
+  "description": "Конверт события реалтайма и журнала. На E01 зафиксированы тип сообщения, тип события и запрет на текст в мета-канале (D-031, D-035). На E03 перечисление расширено типами жизненного цикла игры и участия: до этого их не существовало, а любая мутация обязана оставлять событие (D-033, D-034, D-102).",
   "type": "object",
   "required": ["eventType", "gameId", "seq"],
   "additionalProperties": true,
@@ -10,6 +10,18 @@
     "eventType": {
       "type": "string",
       "enum": [
+        "GAME_CREATED",
+        "GAME_CONTENT_CHANGED",
+        "GAME_READINESS_CHANGED",
+        "GAME_STARTED",
+        "GAME_FINISHED",
+        "GAME_PAUSED",
+        "GAME_RESUMED",
+        "GAME_ARCHIVED",
+        "MEMBERSHIP_INVITED",
+        "MEMBERSHIP_JOINED",
+        "MEMBERSHIP_LEFT",
+        "MEMBERSHIP_BANNED",
         "MESSAGE_POSTED",
         "CHARACTER_ENTERED",
         "CHARACTER_LEFT",
@@ -24,8 +36,7 @@
         "RESTRICTION_SET",
         "RESTRICTION_REVOKED",
         "TURN_OPENED",
-        "TURN_CLOSED",
-        "GAME_FINISHED"
+        "TURN_CLOSED"
       ]
     },
     "messageKind": {

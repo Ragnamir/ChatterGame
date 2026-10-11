@@ -5,7 +5,11 @@ info:
   description: |
     Контур API. На E02 зафиксированы пользователь и локальная аутентификация: регистрация,
     вход, сессия в HttpOnly cookie, профиль, сброс пароля, ключи LLM и удаление аккаунта.
-    Пути идут без префикса `/api`: так они записаны в `PLAN` (`GET /me`).
+    На E03 добавлены игры: создание, чтение, переходы состояния и аудит-чтение журнала.
+    Пути идут без префикса `/api`: так они записаны в `PLAN` (`GET /me`, `GET /games/{id}/events`).
+
+    Состояние игры отдаётся тремя отдельными полями (`readiness`, `visibility`, `phase`)
+    плюс `paused`: это независимые оси (`D-003`), а не одно значение.
 
     Ошибки отдаются в формате `ProblemDetail`; машинный код лежит в свойстве `code`,
     потому что текст переводится по ключу интернализации (`D-081`).
@@ -15,6 +19,192 @@ info:
 servers:
   - url: /
 paths:
+  /games:
+    post:
+      summary: Создание игры мастером
+      description: |
+        Создатель становится мастером и участником со статусом `JOINED`. Игра рождается
+        в состоянии `DRAFT`/`PRIVATE`/`NOT_STARTED` — это значения по умолчанию колонок в
+        `001-baseline.yaml`. Оси независимы (`D-003`).
+      operationId: createGame
+      tags: [game]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateGameRequest' }
+      responses:
+        '201':
+          description: Игра создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    get:
+      summary: Игры, где пользователь мастер или участник
+      operationId: listMyGames
+      tags: [game]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Список игр
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Game' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /games/{id}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Игра по идентификатору
+      operationId: getGame
+      tags: [game]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Игра
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Правка названия, описаний и видимости
+      description: После `FINISHED` правка описаний запрещена (`D-094`).
+      operationId: updateGame
+      tags: [game]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateGameRequest' }
+      responses:
+        '200':
+          description: Игра после правки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/transitions:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Переходы, доступные из текущего состояния
+      description: Клиент показывает кнопки по этому ответу, а не по своей копии правил.
+      operationId: listGameTransitions
+      tags: [game]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Доступные переходы
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransitionList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Переход состояния игры
+      description: |
+        Отказ несёт машинный код и текст причины (`REQUIREMENTS §4`). Пауза требует причину;
+        без неё переход отклоняется (`D-059`).
+      operationId: applyGameTransition
+      tags: [game]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransitionRequest' }
+      responses:
+        '200':
+          description: Игра после перехода
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Переход запрещён из текущего состояния
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /games/{id}/readiness:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Валидация готовности игры
+      description: |
+        Блокирующие замечания запрещают `DRAFT → READY`, предупреждающие не мешают:
+        флаг готовности остаётся за мастером (`REQUIREMENTS §20`).
+      operationId: getGameReadiness
+      tags: [game]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Отчёт валидации
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadinessReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Аудит-чтение журнала игры
+      description: |
+        Страница по возрастанию `seq` с курсором `after` и фильтром по типу. Курсор, а не
+        `offset`: журнал растёт, и смещение пропускало бы и повторяло строки (`D-082`).
+      operationId: listGameEvents
+      tags: [game]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200':
+          description: События в порядке игрового номера
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GameEvent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /auth/register:
     post:
       summary: Открытая регистрация по логину и паролю
@@ -258,6 +448,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    GameId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   headers:
     SessionCookie:
       description: HttpOnly, SameSite=Lax, срок 30 дней
@@ -275,6 +470,11 @@ components:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
       description: Объект не найден
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Нет доступа к игре или нет права на действие
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -371,3 +571,92 @@ components:
         baseUrl: { type: string, maxLength: 255 }
         model: { type: string, maxLength: 128 }
         secret: { type: string, description: Пишется только сюда, обратно не возвращается }
+    Game:
+      type: object
+      description: |
+        Состояние игры — три независимые оси (`D-003`) плюс флаг паузы (`D-059`).
+        `readOnly` вычисляется сервером: после `FINISHED` мир доступен только на чтение (`D-094`).
+      required: [id, masterUserId, title, readiness, visibility, phase, paused, turnBased, archived, readOnly]
+      properties:
+        id: { type: string, format: uuid }
+        masterUserId: { type: string, format: uuid, description: Мастерство не передаётся (`D-021`) }
+        title: { type: string, maxLength: 200 }
+        publicDescription: { type: [string, 'null'] }
+        privateDescription: { type: [string, 'null'], description: Видно мастеру и участникам с правом чтения }
+        readiness: { type: string, enum: [DRAFT, READY] }
+        visibility: { type: string, enum: [PRIVATE, PUBLIC] }
+        phase: { type: string, enum: [NOT_STARTED, RUNNING, FINISHED] }
+        paused: { type: boolean }
+        pauseReason: { type: [string, 'null'] }
+        turnBased: { type: boolean }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        readOnly: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateGameRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 200 }
+        publicDescription: { type: [string, 'null'] }
+        privateDescription: { type: [string, 'null'] }
+    UpdateGameRequest:
+      type: object
+      description: Отсутствующее поле означает «не трогать»; `PATCH`, а не `PUT`.
+      properties:
+        title: { type: [string, 'null'], maxLength: 200 }
+        publicDescription: { type: [string, 'null'] }
+        privateDescription: { type: [string, 'null'] }
+        visibility: { type: [string, 'null'], enum: [PRIVATE, PUBLIC, 'null'] }
+    TransitionRequest:
+      type: object
+      required: [transition]
+      properties:
+        transition: { type: string, enum: [MARK_READY, RETURN_TO_DRAFT, START, PAUSE, RESUME, FINISH] }
+        pauseReason: { type: [string, 'null'], description: Обязателен для `PAUSE` (`D-059`) }
+    TransitionList:
+      type: object
+      required: [transitions]
+      properties:
+        transitions:
+          type: array
+          items:
+            type: object
+            required: [transition, reason]
+            properties:
+              transition: { type: string }
+              reason: { type: string, description: Текст для мастера, не контракт (`D-081`) }
+    ReadinessReport:
+      type: object
+      description: Блокирующие замечания запрещают `DRAFT → READY`, предупреждающие — нет (`REQUIREMENTS §20`).
+      required: [blocking, warning]
+      properties:
+        blocking:
+          type: array
+          items: { $ref: '#/components/schemas/ReadinessFinding' }
+        warning:
+          type: array
+          items: { $ref: '#/components/schemas/ReadinessFinding' }
+    ReadinessFinding:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+    GameEvent:
+      type: object
+      description: |
+        Запись журнала. `seq` непрерывен в пределах игры и выдаётся под блокировкой счётчика
+        (`D-033`); состав типов зафиксирован в `contract/events.schema.json`.
+      required: [id, seq, type, onBehalfOfMaster, payload, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        seq: { type: integer, minimum: 1 }
+        type: { type: string }
+        chatId: { type: [string, 'null'], format: uuid }
+        actorUserId: { type: [string, 'null'], format: uuid }
+        characterId: { type: [string, 'null'], format: uuid }
+        onBehalfOfMaster: { type: boolean }
+        payload: { type: object }
+        createdAt: { type: string, format: date-time }

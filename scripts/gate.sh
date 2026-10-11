@@ -128,6 +128,38 @@ case "$stage" in
       echo "FAIL: нет тестов этапа E02 (E02*Test.java)"
     fi
     ;;
+  E03)
+    if grep -rqE '@RestController' src/main/java/com/chattergame/web/game; then
+      echo "  ok: E03 — веб-слой игр на месте"
+    else
+      fail=1
+      echo "FAIL: E03 требует контроллер создания и чтения игры"
+    fi
+    if find src/test/java -name 'E03*Test.java' | grep -q .; then
+      echo "  ok: E03 — тесты этапа присутствуют"
+    else
+      fail=1
+      echo "FAIL: нет тестов этапа E03 (E03*Test.java)"
+    fi
+    # PLAN E03: «Запрещено: WebSocket, сообщения, персонажи». Проверка адресная, чтобы
+    # преждевременный реалтайм не проехал вместе с этапом.
+    forbidden=$(grep -rlE '@MessageMapping|WebSocketHandler|EnableWebSocket|class Character|@Entity.*Character' \
+      src/main/java 2>/dev/null || true)
+    if [ -n "$forbidden" ]; then
+      fail=1
+      echo "FAIL: E03 — WebSocket, сообщения и персонажи вне объёма этапа:"
+      echo "$forbidden"
+    else
+      echo "  ok: E03 — WebSocket, сообщения и персонажи отсутствуют"
+    fi
+    # Единственное писательское горло (D-034): прямой изменяющий SQL из контроллеров запрещён.
+    if grep -rnE 'jdbc\.(update|execute)\(' src/main/java/com/chattergame/web >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E03 — контроллер пишет в БД напрямую вместо GameMutationService"
+    else
+      echo "  ok: E03 — контроллеры не пишут в доменные таблицы"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

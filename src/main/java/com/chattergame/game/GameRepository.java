@@ -1,29 +1,154 @@
 package com.chattergame.game;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
 /**
- * Заглушка доступа к играм. Сущности игр не удаляются никогда, только архивируются
- * с причиной (`D-010`); второй запрос — единственный разрешённый путь «снять с глаз»,
- * он выставляет флаг архивации, а не удаляет строку.
+ * Доступ к `game`. Удаления здесь нет и не будет: игра никогда не удаляется, только
+ * архивируется с причиной (`D-010`). Методы записи вызываются из
+ * {@link GameMutationService}, а не из контроллеров.
+ *
+ * <p>Состояние пишется набором осей целиком: три оси независимы (`D-003`), но переход,
+ * тронувший одну, обязан сохранить остальные, иначе промежуточное состояние вроде «пауза
+ * снята, а причина осталась» утечёт в ответ API.
  */
 @Repository
 public class GameRepository {
 
-    private final JdbcTemplate jdbcTemplate;
+    private static final String COLUMNS =
+            "id, master_user_id, title, public_description, private_description, readiness, "
+                    + "visibility, phase, paused, pause_reason, turn_based, archived, "
+                    + "archived_reason, final_chat_id, created_at, updated_at";
 
-    public GameRepository(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    /** Те же колонки с префиксом таблицы: нужно там, где `game` соединяется с `membership`. */
+    private static final String COLUMNS_G = "g." + COLUMNS.replace(", ", ", g.");
+
+    private final JdbcTemplate jdbc;
+    private final RowMapper<Game> mapper = this::map;
+
+    public GameRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public void insert(Game game) {
+        jdbc.update(
+                "INSERT INTO game (id, master_user_id, title, public_description, private_description, "
+                        + "readiness, visibility, phase, paused, pause_reason, turn_based, archived, "
+                        + "archived_reason, final_chat_id, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                game.id(),
+                game.masterUserId(),
+                game.title(),
+                game.publicDescription(),
+                game.privateDescription(),
+                game.state().readiness().name(),
+                game.state().visibility().name(),
+                game.state().phase().name(),
+                game.state().paused(),
+                game.state().pauseReason(),
+                game.turnBased(),
+                game.archived(),
+                game.archivedReason(),
+                game.finalChatId(),
+                Timestamp.from(game.createdAt()),
+                Timestamp.from(game.updatedAt()));
+    }
+
+    public Optional<Game> findById(UUID id) {
+        List<Game> rows = jdbc.query("SELECT " + COLUMNS + " FROM game WHERE id = ?", mapper, id);
+        return rows.stream().findFirst();
+    }
+
+    /** Запись осей после перехода; `updated_at` двигает БД, часы приложения тут не нужны. */
+    public void updateState(GameState state) {
+        jdbc.update(
+                "UPDATE game SET readiness = ?, visibility = ?, phase = ?, paused = ?, "
+                        + "pause_reason = ?, updated_at = now() WHERE id = ?",
+                state.readiness().name(),
+                state.visibility().name(),
+                state.phase().name(),
+                state.paused(),
+                state.pauseReason(),
+                state.gameId());
+    }
+
+    public void updateContent(
+            UUID id, String title, String publicDescription, String privateDescription) {
+        jdbc.update(
+                "UPDATE game SET title = ?, public_description = ?, private_description = ?, "
+                        + "updated_at = now() WHERE id = ?",
+                title,
+                publicDescription,
+                privateDescription,
+                id);
+    }
+
+    public void updateVisibility(UUID id, Visibility visibility) {
+        jdbc.update(
+                "UPDATE game SET visibility = ?, updated_at = now() WHERE id = ?",
+                visibility.name(),
+                id);
+    }
+
+    public void markArchived(UUID id, String reason) {
+        jdbc.update(
+                "UPDATE game SET archived = true, archived_reason = ?, updated_at = now() WHERE id = ?",
+                reason,
+                id);
+    }
+
+    /** Игры, которые ещё не в архиве; архивация идемпотентна и повторно их не трогает. */
+    public List<UUID> findUnarchivedByMaster(UUID masterUserId) {
+        return jdbc.queryForList(
+                "SELECT id FROM game WHERE master_user_id = ? AND archived = false",
+                UUID.class,
+                masterUserId);
+    }
+
+    /** Игры, где пользователь числится участником, включая забаненные: бан виден в ответе. */
+    public List<Game> findByMember(UUID userId) {
+        return jdbc.query(
+                "SELECT " + COLUMNS_G + " FROM game g "
+                        + "JOIN membership m ON m.game_id = g.id "
+                        + "WHERE m.user_id = ? ORDER BY g.created_at DESC",
+                mapper,
+                userId);
     }
 
     public long count() {
-        Long count = jdbcTemplate.queryForObject("SELECT count(*) FROM game", Long.class);
+        Long count = jdbc.queryForObject("SELECT count(*) FROM game", Long.class);
         return count == null ? 0L : count;
     }
 
-    public void archive(long gameId, String reason) {
-        jdbcTemplate.update(
-                "UPDATE game SET archived = true, archived_reason = ? WHERE id = ?", reason, gameId);
+    private Game map(ResultSet rs, int rowNum) throws SQLException {
+        UUID id = rs.getObject("id", UUID.class);
+        return new Game(
+                id,
+                rs.getObject("master_user_id", UUID.class),
+                rs.getString("title"),
+                rs.getString("public_description"),
+                rs.getString("private_description"),
+                new GameState(
+                        id,
+                        Readiness.valueOf(rs.getString("readiness")),
+                        Visibility.valueOf(rs.getString("visibility")),
+                        Phase.valueOf(rs.getString("phase")),
+                        rs.getBoolean("paused"),
+                        rs.getString("pause_reason"),
+                        rs.getBoolean("archived")),
+                rs.getBoolean("turn_based"),
+                rs.getBoolean("archived"),
+                rs.getString("archived_reason"),
+                rs.getObject("final_chat_id", UUID.class),
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("updated_at").toInstant());
     }
 }
