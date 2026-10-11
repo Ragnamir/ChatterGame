@@ -40,7 +40,7 @@ done
 [ -n "$no_ac" ] && err "этапы без критериев приёмки:$no_ac" || ok "критерии приёмки есть у всех этапов"
 
 # 4. Нет следов отвергнутых формулировок
-stale=$(grep -nE 'NO_JOIN[^E]|character_id, chat_id, seq|не требуется для старых сообщений' "${DOCS[@]}" || true)
+stale=$(grep -nE 'NO_JOIN[^E]|character_id, chat_id, seq|не требуется для старых сообщений|N часов|таймаут не сжигает|не подтверждён' "${DOCS[@]}" || true)
 [ -n "$stale" ] && { err "устаревшие формулировки:"; echo "$stale"; } || ok "нет следов отвергнутых решений"
 
 # 5. Решения, порождённые самопроверкой, помечены как не обсуждённые владельцем
@@ -50,18 +50,31 @@ else
   err "нет пометки о происхождении решений D-086/D-087"
 fi
 
-# 6. Не подтверждённые решения вынесены в отдельный раздел
+# 6. Открытых вопросов быть не должно: все решения приняты
 if grep -q '## Открытые решения' docs/DECISIONS.md; then
-  open_refs=$(sed -n '/## Открытые решения/,$p' docs/DECISIONS.md | grep -oE '^\*\*D-[0-9]{3}' | wc -l)
-  ok "открытые решения отделены от принятых ($open_refs записей)"
+  open_refs=$(sed -n '/## Открытые решения/,$p' docs/DECISIONS.md | grep -cE '^\*\*D-[0-9]{3}' || true)
+  if [ "$open_refs" -eq 0 ]; then
+    ok "открытых решений нет, раздел оставлен с пояснением"
+  else
+    err "остались не принятые решения: $open_refs"
+  fi
 else
   err "нет раздела «Открытые решения»"
 fi
 
-# 7. STATUS.md существует и содержит список вопросов владельцу
-grep -q 'Открытые вопросы владельца продукта' docs/STATUS.md \
-  && ok "STATUS.md содержит вопросы владельцу до начала E01" \
-  || err "STATUS.md не содержит вопросов владельцу"
+# 8. Ключевые лимиты присутствуют (регрессия после правок решений)
+for pair in "docs/REQUIREMENTS.md:8 до 128" "docs/REQUIREMENTS.md:30 дней" \
+            "docs/REQUIREMENTS.md:chat/completions" "docs/REQUIREMENTS.md:до 4000 знаков" \
+            "docs/REQUIREMENTS.md:одна картинка на сущность" "docs/PLAN.md:pg_dump" ; do
+  file=${pair%%:*}; needle=${pair#*:}
+  grep -qi -- "$needle" "$file" && ok "лимит на месте: $needle" \
+    || err "потерян лимит «$needle» в $file"
+done
+
+# 7. STATUS.md фиксирует, что вопросы перед E01 закрыты
+grep -q 'Закрытие вопросов перед E01' docs/STATUS.md \
+  && ok "STATUS.md фиксирует закрытие вопросов перед E01" \
+  || err "STATUS.md не фиксирует закрытие вопросов перед E01"
 
 if [ "$fail" -eq 0 ]; then
   echo "DOC CHECK PASSED"
