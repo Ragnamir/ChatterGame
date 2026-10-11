@@ -1,0 +1,1029 @@
+# Каркас модели данных (E01). Все таблицы создаются сразу, чтобы проверить, что модель
+# помещается, до появления кода. Применённый файл не редактируется никогда: изменения —
+# только новым changes/<NNN>-<stage>.yaml.
+#
+# UUIDv7 как внешний PK выдаёт приложение, а не БД: функция uuidv7() есть только с
+# PostgreSQL 18, стек зафиксирован на PostgreSQL 16.
+databaseChangeLog:
+
+  - changeSet:
+      id: 001-01-app-user
+      author: e01
+      changes:
+        - createTable:
+            tableName: app_user
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_app_user } }
+              - column: { name: login, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: login_normalized, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: display_name, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: email, type: varchar(320) }
+              - column: { name: email_verified_at, type: timestamptz }
+              - column: { name: avatar_asset_id, type: uuid }
+              - column: { name: theme, type: varchar(16), defaultValue: system, constraints: { nullable: false } }
+              - column: { name: status, type: varchar(16), defaultValue: ACTIVE, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - createIndex:
+            tableName: app_user
+            indexName: ux_app_user_login_normalized
+            unique: true
+            columns:
+              - column: { name: login_normalized }
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_app_user_email ON app_user (email) WHERE email IS NOT NULL
+            rollback: DROP INDEX ux_app_user_email
+
+  - changeSet:
+      id: 001-02-auth-identity
+      author: e01
+      changes:
+        - createTable:
+            tableName: auth_identity
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_auth_identity } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: provider, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: provider_user_id, type: varchar(255) }
+              - column: { name: email, type: varchar(320) }
+              - column: { name: secret_hash, type: varchar(255) }
+              - column: { name: verified_at, type: timestamptz }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: auth_identity
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_auth_identity_user
+        - createIndex:
+            tableName: auth_identity
+            indexName: ux_auth_identity_provider_user
+            unique: true
+            columns:
+              - column: { name: provider }
+              - column: { name: provider_user_id }
+        - createIndex:
+            tableName: auth_identity
+            indexName: ix_auth_identity_user
+            columns:
+              - column: { name: user_id }
+
+  - changeSet:
+      id: 001-03-session
+      author: e01
+      changes:
+        - createTable:
+            tableName: session
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_session } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: token_hash, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: user_agent, type: varchar(255) }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: last_seen_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: revoked_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: session
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_session_user
+        - createIndex:
+            tableName: session
+            indexName: ux_session_token_hash
+            unique: true
+            columns:
+              - column: { name: token_hash }
+        - createIndex:
+            tableName: session
+            indexName: ix_session_user
+            columns:
+              - column: { name: user_id }
+
+  - changeSet:
+      id: 001-04-password-reset-token
+      author: e01
+      changes:
+        - createTable:
+            tableName: password_reset_token
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_password_reset_token } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: token_hash, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: used_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: password_reset_token
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_password_reset_token_user
+        - createIndex:
+            tableName: password_reset_token
+            indexName: ux_password_reset_token_hash
+            unique: true
+            columns:
+              - column: { name: token_hash }
+
+  - changeSet:
+      id: 001-05-llm-credential
+      author: e01
+      changes:
+        - createTable:
+            tableName: llm_credential
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_llm_credential } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: label, type: varchar(64) }
+              - column: { name: base_url, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: model, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: secret_ciphertext, type: bytea, constraints: { nullable: false } }
+              - column: { name: secret_iv, type: bytea, constraints: { nullable: false } }
+              - column: { name: secret_tag, type: bytea, constraints: { nullable: false } }
+              - column: { name: active, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: llm_credential
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_llm_credential_user
+        - createIndex:
+            tableName: llm_credential
+            indexName: ix_llm_credential_user
+            columns:
+              - column: { name: user_id }
+        - sql:
+            comment: один активный ключ на пользователя (D-093)
+            sql: CREATE UNIQUE INDEX ux_llm_credential_active ON llm_credential (user_id) WHERE active
+            rollback: DROP INDEX ux_llm_credential_active
+
+  - changeSet:
+      id: 001-06-app-setting
+      author: e01
+      changes:
+        - createTable:
+            tableName: app_setting
+            columns:
+              - column: { name: key, type: varchar(128), constraints: { primaryKey: true, primaryKeyName: pk_app_setting } }
+              - column: { name: value, type: text, constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+
+  - changeSet:
+      id: 001-07-notification-preference
+      author: e01
+      changes:
+        - createTable:
+            tableName: notification_preference
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_notification_preference } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: event_type, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: channel, type: varchar(16), defaultValue: NONE, constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: notification_preference
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_notification_preference_user
+        - createIndex:
+            tableName: notification_preference
+            indexName: ux_notification_preference_user_event
+            unique: true
+            columns:
+              - column: { name: user_id }
+              - column: { name: event_type }
+
+  - changeSet:
+      id: 001-08-game
+      author: e01
+      changes:
+        - createTable:
+            tableName: game
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_game } }
+              - column: { name: master_user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: title, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: public_description, type: text }
+              - column: { name: private_description, type: text }
+              - column: { name: readiness, type: varchar(16), defaultValue: DRAFT, constraints: { nullable: false } }
+              - column: { name: visibility, type: varchar(16), defaultValue: PRIVATE, constraints: { nullable: false } }
+              - column: { name: phase, type: varchar(16), defaultValue: NOT_STARTED, constraints: { nullable: false } }
+              - column: { name: paused, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: pause_reason, type: varchar(500) }
+              - column: { name: turn_based, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: archived, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: archived_reason, type: varchar(500) }
+              - column: { name: final_chat_id, type: uuid }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: game
+            baseColumnNames: master_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_game_master_user
+        - createIndex:
+            tableName: game
+            indexName: ix_game_master
+            columns:
+              - column: { name: master_user_id }
+        - createIndex:
+            tableName: game
+            indexName: ix_game_listing
+            columns:
+              - column: { name: visibility }
+              - column: { name: readiness }
+              - column: { name: phase }
+
+  - changeSet:
+      id: 001-09-game-stream
+      author: e01
+      changes:
+        - createTable:
+            tableName: game_stream
+            columns:
+              - column: { name: game_id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_game_stream } }
+              - column: { name: last_seq, type: bigint, defaultValueNumeric: 0, constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: game_stream
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_game_stream_game
+
+  - changeSet:
+      id: 001-10-membership
+      author: e01
+      changes:
+        - createTable:
+            tableName: membership
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_membership } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: role, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: status, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: joined_at, type: timestamptz }
+              - column: { name: left_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: membership
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_membership_game
+        - addForeignKeyConstraint:
+            baseTableName: membership
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_membership_user
+        - createIndex:
+            tableName: membership
+            indexName: ux_membership_game_user
+            unique: true
+            columns:
+              - column: { name: game_id }
+              - column: { name: user_id }
+        - createIndex:
+            tableName: membership
+            indexName: ix_membership_user
+            columns:
+              - column: { name: user_id }
+
+  - changeSet:
+      id: 001-11-chat
+      author: e01
+      changes:
+        - createTable:
+            tableName: chat
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_chat } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: title, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: description, type: text }
+              - column: { name: image_asset_id, type: uuid }
+              - column: { name: owner_membership_id, type: uuid }
+              - column: { name: archived, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: disabled, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: chat
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_chat_game
+        - addForeignKeyConstraint:
+            baseTableName: chat
+            baseColumnNames: owner_membership_id
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_chat_owner_membership
+        - createIndex:
+            tableName: chat
+            indexName: ix_chat_game_kind
+            columns:
+              - column: { name: game_id }
+              - column: { name: kind }
+
+  - changeSet:
+      id: 001-12-transition
+      author: e01
+      changes:
+        - createTable:
+            tableName: transition
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_transition } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: from_chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: to_chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: title, type: varchar(200) }
+              - column: { name: archived, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: transition
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_transition_game
+        - addForeignKeyConstraint:
+            baseTableName: transition
+            baseColumnNames: from_chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_transition_from_chat
+        - addForeignKeyConstraint:
+            baseTableName: transition
+            baseColumnNames: to_chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_transition_to_chat
+        - createIndex:
+            tableName: transition
+            indexName: ix_transition_game
+            columns:
+              - column: { name: game_id }
+
+  - changeSet:
+      id: 001-13-transition-state
+      author: e01
+      changes:
+        - createTable:
+            tableName: transition_state
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_transition_state } }
+              - column: { name: transition_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: character_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: state, type: varchar(24), constraints: { nullable: false } }
+              - column: { name: reason, type: varchar(500) }
+        - addForeignKeyConstraint:
+            baseTableName: transition_state
+            baseColumnNames: transition_id
+            referencedTableName: transition
+            referencedColumnNames: id
+            constraintName: fk_transition_state_transition
+        - createIndex:
+            tableName: transition_state
+            indexName: ux_transition_state_transition_character
+            unique: true
+            columns:
+              - column: { name: transition_id }
+              - column: { name: character_id }
+
+  - changeSet:
+      id: 001-14-character
+      author: e01
+      changes:
+        - createTable:
+            tableName: character
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_character } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: name, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: portrait_asset_id, type: uuid }
+              - column: { name: appearance, type: text }
+              - column: { name: public_history, type: text }
+              - column: { name: private_history, type: text }
+              - column: { name: playable, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: npc, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: occupant_membership_id, type: uuid }
+              - column: { name: archived, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: character
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_character_game
+        - addForeignKeyConstraint:
+            baseTableName: character
+            baseColumnNames: occupant_membership_id
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_character_occupant
+        - createIndex:
+            tableName: character
+            indexName: ix_character_game
+            columns:
+              - column: { name: game_id }
+
+  - changeSet:
+      id: 001-15-presence
+      author: e01
+      changes:
+        - createTable:
+            tableName: presence
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_presence } }
+              - column: { name: character_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: position, type: varchar(64) }
+              - column: { name: hidden, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: joined_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: left_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: presence
+            baseColumnNames: character_id
+            referencedTableName: character
+            referencedColumnNames: id
+            constraintName: fk_presence_character
+        - addForeignKeyConstraint:
+            baseTableName: presence
+            baseColumnNames: chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_presence_chat
+        - createIndex:
+            tableName: presence
+            indexName: ix_presence_character
+            columns:
+              - column: { name: character_id }
+        - createIndex:
+            tableName: presence
+            indexName: ix_presence_chat
+            columns:
+              - column: { name: chat_id }
+
+  - changeSet:
+      id: 001-16-restriction
+      author: e01
+      changes:
+        - createTable:
+            tableName: restriction
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_restriction } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: subject_kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: subject_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: reason, type: varchar(500), constraints: { nullable: false } }
+              - column: { name: created_by, type: uuid }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz }
+              - column: { name: revoked_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: restriction
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_restriction_game
+        - createIndex:
+            tableName: restriction
+            indexName: ix_restriction_subject
+            columns:
+              - column: { name: game_id }
+              - column: { name: subject_kind }
+              - column: { name: subject_id }
+
+  - changeSet:
+      id: 001-17-storage
+      author: e01
+      changes:
+        - createTable:
+            tableName: storage
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_storage } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(24), constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid }
+              - column: { name: character_id, type: uuid }
+              - column: { name: title, type: varchar(200) }
+              - column: { name: description, type: text }
+              - column: { name: is_open, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: storage
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_storage_game
+        - addForeignKeyConstraint:
+            baseTableName: storage
+            baseColumnNames: chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_storage_chat
+        - addForeignKeyConstraint:
+            baseTableName: storage
+            baseColumnNames: character_id
+            referencedTableName: character
+            referencedColumnNames: id
+            constraintName: fk_storage_character
+        - createIndex:
+            tableName: storage
+            indexName: ix_storage_game
+            columns:
+              - column: { name: game_id }
+
+  - changeSet:
+      id: 001-18-item
+      author: e01
+      changes:
+        - createTable:
+            tableName: item
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_item } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: name, type: varchar(200), constraints: { nullable: false } }
+              - column: { name: description, type: text }
+              - column: { name: image_asset_id, type: uuid }
+              - column: { name: size, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: properties, type: text }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: item
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_item_game
+        - createIndex:
+            tableName: item
+            indexName: ix_item_game
+            columns:
+              - column: { name: game_id }
+
+  - changeSet:
+      id: 001-19-item-placement
+      author: e01
+      changes:
+        - createTable:
+            tableName: item_placement
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_item_placement } }
+              - column: { name: item_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: storage_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: placed_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: item_placement
+            baseColumnNames: item_id
+            referencedTableName: item
+            referencedColumnNames: id
+            constraintName: fk_item_placement_item
+        - addForeignKeyConstraint:
+            baseTableName: item_placement
+            baseColumnNames: storage_id
+            referencedTableName: storage
+            referencedColumnNames: id
+            constraintName: fk_item_placement_storage
+        - createIndex:
+            tableName: item_placement
+            indexName: ux_item_placement_item
+            unique: true
+            columns:
+              - column: { name: item_id }
+        - createIndex:
+            tableName: item_placement
+            indexName: ix_item_placement_storage
+            columns:
+              - column: { name: storage_id }
+
+  - changeSet:
+      id: 001-20-message
+      author: e01
+      changes:
+        - createTable:
+            tableName: message
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_message } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: seq, type: bigint, constraints: { nullable: false } }
+              - column: { name: kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: character_id, type: uuid }
+              - column: { name: author_membership_id, type: uuid }
+              - column: { name: author_user_id, type: uuid }
+              - column: { name: on_behalf_of_master, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: body, type: varchar(4000) }
+              - column: { name: payload, type: jsonb }
+              - column: { name: matched_note_ids, type: jsonb }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: message
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_message_game
+        - addForeignKeyConstraint:
+            baseTableName: message
+            baseColumnNames: chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_message_chat
+        - createIndex:
+            tableName: message
+            indexName: ux_message_chat_seq
+            unique: true
+            columns:
+              - column: { name: chat_id }
+              - column: { name: seq }
+
+  - changeSet:
+      id: 001-21-inbox-entry
+      author: e01
+      changes:
+        - createTable:
+            tableName: inbox_entry
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_inbox_entry } }
+              - column: { name: subject_kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: subject_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: event_seq, type: bigint, constraints: { nullable: false } }
+              - column: { name: message_id, type: uuid }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: inbox_entry
+            baseColumnNames: chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_inbox_entry_chat
+        - addForeignKeyConstraint:
+            baseTableName: inbox_entry
+            baseColumnNames: message_id
+            referencedTableName: message
+            referencedColumnNames: id
+            constraintName: fk_inbox_entry_message
+        # Обязательный индекс resume и бейджей непрочитанного: (D-083, D-086).
+        - createIndex:
+            tableName: inbox_entry
+            indexName: ix_inbox_entry_subject_chat_seq
+            columns:
+              - column: { name: subject_kind }
+              - column: { name: subject_id }
+              - column: { name: chat_id }
+              - column: { name: event_seq }
+        - createIndex:
+            tableName: inbox_entry
+            indexName: ux_inbox_entry_subject_event
+            unique: true
+            columns:
+              - column: { name: subject_kind }
+              - column: { name: subject_id }
+              - column: { name: chat_id }
+              - column: { name: event_seq }
+
+  - changeSet:
+      id: 001-22-read-cursor
+      author: e01
+      changes:
+        - createTable:
+            tableName: read_cursor
+            columns:
+              - column: { name: subject_kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: subject_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: last_seq, type: bigint, defaultValueNumeric: 0, constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addPrimaryKey:
+            tableName: read_cursor
+            columnNames: subject_kind, subject_id, chat_id
+            constraintName: pk_read_cursor
+
+  - changeSet:
+      id: 001-23-asset
+      author: e01
+      changes:
+        - createTable:
+            tableName: asset
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_asset } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: owner_user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: mime, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: byte_size, type: bigint, constraints: { nullable: false } }
+              - column: { name: width, type: integer }
+              - column: { name: height, type: integer }
+              - column: { name: sha256, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: original_name, type: varchar(255) }
+              - column: { name: storage_key, type: varchar(255), constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: asset
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_asset_game
+        - addForeignKeyConstraint:
+            baseTableName: asset
+            baseColumnNames: owner_user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_asset_owner_user
+        - createIndex:
+            tableName: asset
+            indexName: ux_asset_storage_key
+            unique: true
+            columns:
+              - column: { name: storage_key }
+        - createIndex:
+            tableName: asset
+            indexName: ix_asset_game
+            columns:
+              - column: { name: game_id }
+
+  - changeSet:
+      id: 001-24-note
+      author: e01
+      changes:
+        - createTable:
+            tableName: note
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_note } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: author_membership_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: target_kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: target_id, type: uuid }
+              - column: { name: body, type: varchar(2000), constraints: { nullable: false } }
+              - column: { name: matching_pending, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: note
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_note_game
+        - addForeignKeyConstraint:
+            baseTableName: note
+            baseColumnNames: author_membership_id
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_note_author_membership
+        - createIndex:
+            tableName: note
+            indexName: ix_note_author
+            columns:
+              - column: { name: author_membership_id }
+        - createIndex:
+            tableName: note
+            indexName: ix_note_target
+            columns:
+              - column: { name: target_kind }
+              - column: { name: target_id }
+
+  - changeSet:
+      id: 001-25-note-keyword
+      author: e01
+      changes:
+        - createTable:
+            tableName: note_keyword
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_note_keyword } }
+              - column: { name: note_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: raw, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: normalized, type: varchar(128), constraints: { nullable: false } }
+              - column: { name: exact_match, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: note_keyword
+            baseColumnNames: note_id
+            referencedTableName: note
+            referencedColumnNames: id
+            constraintName: fk_note_keyword_note
+        - createIndex:
+            tableName: note_keyword
+            indexName: ix_note_keyword_note
+            columns:
+              - column: { name: note_id }
+        - createIndex:
+            tableName: note_keyword
+            indexName: ix_note_keyword_normalized
+            columns:
+              - column: { name: normalized }
+
+  - changeSet:
+      id: 001-26-saved-message
+      author: e01
+      changes:
+        - createTable:
+            tableName: saved_message
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_saved_message } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: owner_membership_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: message_id, type: uuid }
+              - column: { name: text_snapshot, type: text, constraints: { nullable: false } }
+              - column: { name: speaker_snapshot, type: varchar(200) }
+              - column: { name: comment, type: varchar(2000) }
+              - column: { name: note_id, type: uuid }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: saved_message
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_saved_message_game
+        - addForeignKeyConstraint:
+            baseTableName: saved_message
+            baseColumnNames: owner_membership_id
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_saved_message_owner
+        - addForeignKeyConstraint:
+            baseTableName: saved_message
+            baseColumnNames: note_id
+            referencedTableName: note
+            referencedColumnNames: id
+            constraintName: fk_saved_message_note
+        - createIndex:
+            tableName: saved_message
+            indexName: ix_saved_message_owner
+            columns:
+              - column: { name: owner_membership_id }
+
+  - changeSet:
+      id: 001-27-turn
+      author: e01
+      changes:
+        - createTable:
+            tableName: turn
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_turn } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: n, type: integer, constraints: { nullable: false } }
+              - column: { name: status, type: varchar(16), defaultValue: OPEN, constraints: { nullable: false } }
+              - column: { name: opened_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: closed_by, type: uuid }
+              - column: { name: closed_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: turn
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_turn_game
+        - createIndex:
+            tableName: turn
+            indexName: ux_turn_game_n
+            unique: true
+            columns:
+              - column: { name: game_id }
+              - column: { name: n }
+
+  - changeSet:
+      id: 001-28-turn-budget
+      author: e01
+      changes:
+        - createTable:
+            tableName: turn_budget
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_turn_budget } }
+              - column: { name: turn_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: character_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: action_used, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: speech_used, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: turn_budget
+            baseColumnNames: turn_id
+            referencedTableName: turn
+            referencedColumnNames: id
+            constraintName: fk_turn_budget_turn
+        - createIndex:
+            tableName: turn_budget
+            indexName: ux_turn_budget_turn_character
+            unique: true
+            columns:
+              - column: { name: turn_id }
+              - column: { name: character_id }
+
+  - changeSet:
+      id: 001-29-request
+      author: e01
+      changes:
+        - createTable:
+            tableName: request
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_request } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: origin, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: type, type: varchar(32), constraints: { nullable: false } }
+              - column: { name: from_membership_id, type: uuid }
+              - column: { name: to_character_id, type: uuid }
+              - column: { name: payload, type: jsonb }
+              - column: { name: status, type: varchar(24), defaultValue: PENDING, constraints: { nullable: false } }
+              - column: { name: error, type: text }
+              - column: { name: idempotency_key, type: varchar(128) }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: updated_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: request
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_request_game
+        - addForeignKeyConstraint:
+            baseTableName: request
+            baseColumnNames: from_membership_id
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_request_from_membership
+        - addForeignKeyConstraint:
+            baseTableName: request
+            baseColumnNames: to_character_id
+            referencedTableName: character
+            referencedColumnNames: id
+            constraintName: fk_request_to_character
+        - createIndex:
+            tableName: request
+            indexName: ix_request_game_status
+            columns:
+              - column: { name: game_id }
+              - column: { name: status }
+        - createIndex:
+            tableName: request
+            indexName: ux_request_idempotency
+            unique: true
+            columns:
+              - column: { name: game_id }
+              - column: { name: idempotency_key }
+
+  - changeSet:
+      id: 001-30-request-operation
+      author: e01
+      changes:
+        - createTable:
+            tableName: request_operation
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_request_operation } }
+              - column: { name: request_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: ordinal, type: integer, constraints: { nullable: false } }
+              - column: { name: op, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: payload, type: jsonb }
+              - column: { name: status, type: varchar(24), defaultValue: PENDING, constraints: { nullable: false } }
+              - column: { name: old_value, type: jsonb }
+        - addForeignKeyConstraint:
+            baseTableName: request_operation
+            baseColumnNames: request_id
+            referencedTableName: request
+            referencedColumnNames: id
+            constraintName: fk_request_operation_request
+        - createIndex:
+            tableName: request_operation
+            indexName: ux_request_operation_ordinal
+            unique: true
+            columns:
+              - column: { name: request_id }
+              - column: { name: ordinal }
+
+  - changeSet:
+      id: 001-31-game-event
+      author: e01
+      changes:
+        - createTable:
+            tableName: game_event
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_game_event } }
+              - column: { name: game_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: seq, type: bigint, constraints: { nullable: false } }
+              - column: { name: type, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: chat_id, type: uuid }
+              - column: { name: actor_user_id, type: uuid }
+              - column: { name: character_id, type: uuid }
+              - column: { name: on_behalf_of_master, type: boolean, defaultValueBoolean: false, constraints: { nullable: false } }
+              - column: { name: payload, type: jsonb, constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+        - addForeignKeyConstraint:
+            baseTableName: game_event
+            baseColumnNames: game_id
+            referencedTableName: game
+            referencedColumnNames: id
+            constraintName: fk_game_event_game
+        - createIndex:
+            tableName: game_event
+            indexName: ux_game_event_game_seq
+            unique: true
+            columns:
+              - column: { name: game_id }
+              - column: { name: seq }
+        - createIndex:
+            tableName: game_event
+            indexName: ix_game_event_game_type
+            columns:
+              - column: { name: game_id }
+              - column: { name: type }

@@ -1,0 +1,373 @@
+openapi: 3.1.0
+info:
+  title: ChatterGame API
+  version: 0.1.0
+  description: |
+    Контур API. На E02 зафиксированы пользователь и локальная аутентификация: регистрация,
+    вход, сессия в HttpOnly cookie, профиль, сброс пароля, ключи LLM и удаление аккаунта.
+    Пути идут без префикса `/api`: так они записаны в `PLAN` (`GET /me`).
+
+    Ошибки отдаются в формате `ProblemDetail`; машинный код лежит в свойстве `code`,
+    потому что текст переводится по ключу интернализации (`D-081`).
+
+    Любое изменение файла требует обновления снапшота
+    `src/test/resources/contract/openapi.snapshot.yaml`, иначе гейт краснеет.
+servers:
+  - url: /
+paths:
+  /auth/register:
+    post:
+      summary: Открытая регистрация по логину и паролю
+      operationId: register
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Аккаунт создан, сессия выдана cookie
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /auth/login:
+    post:
+      summary: Вход по логину и паролю
+      operationId: login
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Вход выполнен, сессия выдана cookie
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      summary: Выход на текущем устройстве
+      operationId: logout
+      tags: [auth]
+      responses:
+        '204':
+          description: Сессия отозвана, cookie снята
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+  /auth/logout-all:
+    post:
+      summary: Выход на всех устройствах
+      operationId: logoutAll
+      tags: [auth]
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Все сессии пользователя отозваны
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me:
+    get:
+      summary: Текущий пользователь
+      operationId: getMe
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Профиль
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      summary: Обновление отображаемого имени, почты и темы
+      operationId: updateMe
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
+      responses:
+        '200':
+          description: Профиль после обновления
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserProfile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Удаление аккаунта с анонимизацией PII
+      operationId: deleteMe
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeleteAccountRequest' }
+      responses:
+        '204':
+          description: Вход заблокирован, PII анонимизированы, сессии удалены
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/password:
+    post:
+      summary: Смена пароля
+      description: Инвалидирует все сессии, включая текущую (`D-096`).
+      operationId: changePassword
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204':
+          description: Пароль изменён, сессии отозваны
+          headers:
+            Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/password/reset:
+    post:
+      summary: Запрос письма для сброса пароля
+      description: |
+        Ответ одинаков для существующего и несуществующего адреса (`D-079`).
+      operationId: requestPasswordReset
+      tags: [profile]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetRequest' }
+      responses:
+        '202':
+          description: Письмо отправлено, если адрес существует
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/password/reset/confirm:
+    post:
+      summary: Установка нового пароля по токену из письма
+      operationId: confirmPasswordReset
+      tags: [profile]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordConfirmRequest' }
+      responses:
+        '204':
+          description: Пароль установлен, все сессии отозваны
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /me/llm-credentials:
+    get:
+      summary: Ключи LLM пользователя
+      description: Секрет не возвращается ни в каком виде (`D-093`).
+      operationId: listLlmCredentials
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Ключи без секретов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LlmCredentialView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: Добавление ключа LLM
+      operationId: createLlmCredential
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCredentialRequest' }
+      responses:
+        '201':
+          description: Ключ сохранён зашифрованным, активным не становится
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmCredentialView' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/llm-credentials/{id}/activate:
+    post:
+      summary: Сделать ключ активным
+      description: Активный ключ у пользователя ровно один.
+      operationId: activateLlmCredential
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: Ключ активен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmCredentialView' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /me/llm-credentials/{id}:
+    delete:
+      summary: Удаление ключа LLM
+      operationId: deleteLlmCredential
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '204':
+          description: Ключ удалён
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: CHATTERGAME_SESSION
+  parameters:
+    CredentialId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  headers:
+    SessionCookie:
+      description: HttpOnly, SameSite=Lax, срок 30 дней
+      schema: { type: string }
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Требуется вход или неверные креденшалы
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Объект не найден
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Логин или почта уже заняты
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: Превышен лимит частоты запросов
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      description: Ошибка в формате ProblemDetail с машинным кодом в поле `code`.
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string }
+    UserProfile:
+      type: object
+      required: [id, login, displayName, theme, emailVerified]
+      properties:
+        id: { type: string, format: uuid }
+        login: { type: string, description: Отображаемая форма, регистр сохранён }
+        displayName: { type: string }
+        email: { type: [string, 'null'] }
+        emailVerified: { type: boolean }
+        avatarAssetId: { type: [string, 'null'], format: uuid }
+        theme: { type: string, enum: [system, light, dark] }
+        createdAt: { type: string, format: date-time }
+    RegisterRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string, maxLength: 64, description: NFC-нормализация на сервере }
+        password: { type: string, minLength: 8, maxLength: 128 }
+        displayName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], maxLength: 320 }
+    LoginRequest:
+      type: object
+      required: [login, password]
+      properties:
+        login: { type: string }
+        password: { type: string }
+    UpdateProfileRequest:
+      type: object
+      properties:
+        displayName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], maxLength: 320 }
+        theme: { type: [string, 'null'], enum: [system, light, dark, 'null'] }
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 8, maxLength: 128 }
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 320 }
+    ResetPasswordConfirmRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string }
+        newPassword: { type: string, minLength: 8, maxLength: 128 }
+    DeleteAccountRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string }
+    LlmCredentialView:
+      type: object
+      description: Секрет отсутствует в схеме целиком (`D-093`).
+      required: [id, baseUrl, model, active]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: [string, 'null'], maxLength: 64 }
+        baseUrl: { type: string }
+        model: { type: string }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    CreateCredentialRequest:
+      type: object
+      required: [baseUrl, model, secret]
+      properties:
+        label: { type: [string, 'null'], maxLength: 64 }
+        baseUrl: { type: string, maxLength: 255 }
+        model: { type: string, maxLength: 128 }
+        secret: { type: string, description: Пишется только сюда, обратно не возвращается }

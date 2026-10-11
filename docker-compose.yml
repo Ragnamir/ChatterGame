@@ -1,0 +1,31 @@
+# Локальный Postgres для разработки и прогона гейта.
+#
+# Образ зафиксирован на версии 16 — это подтверждённая версия стека (D-092).
+# Один сервис с двумя профилями: состав одинаков, различаются имя тома и порт,
+# чтобы данные dev и prod не пересекались.
+#
+#   docker compose --profile dev up -d
+#   docker compose --profile prod up -d
+services:
+  postgres:
+    image: postgres:16
+    profiles: ["dev", "prod"]
+    environment:
+      POSTGRES_DB: ${CHATTERGAME_DB_NAME:-chattergame}
+      POSTGRES_USER: ${CHATTERGAME_DB_USER:-chattergame}
+      POSTGRES_PASSWORD: ${CHATTERGAME_DB_PASSWORD:-chattergame}
+    ports:
+      - "${CHATTERGAME_DB_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${CHATTERGAME_DB_USER:-chattergame} -d ${CHATTERGAME_DB_NAME:-chattergame}
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

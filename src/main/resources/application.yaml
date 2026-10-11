@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: chattergame
+  profiles:
+    default: dev
+  datasource:
+    url: ${CHATTERGAME_DB_URL:jdbc:postgresql://localhost:5432/chattergame}
+    username: ${CHATTERGAME_DB_USER:chattergame}
+    password: ${CHATTERGAME_DB_PASSWORD:chattergame}
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+server:
+  port: 8080

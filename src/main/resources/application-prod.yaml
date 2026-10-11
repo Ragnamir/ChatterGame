@@ -1,0 +1,16 @@
+# Профиль продакшна. SMTP обязателен: без spring.mail.host старт падает (D-079).
+spring:
+  mail:
+    host: ${CHATTERGAME_SMTP_HOST:}
+    port: ${CHATTERGAME_SMTP_PORT:587}
+
+chattergame:
+  mail:
+    from: ${CHATTERGAME_MAIL_FROM:}
+  session:
+    # Прод живёт за TLS, поэтому cookie сессии уходит только по https.
+    cookie-secure: true
+
+logging:
+  level:
+    com.chattergame: INFO

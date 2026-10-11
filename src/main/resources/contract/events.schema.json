@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chattergame.local/contract/events.schema.json",
+  "title": "Игровое событие",
+  "description": "Конверт события реалтайма и журнала. На E01 фиксируются только тип сообщения, тип события и запрет на текст в мета-канале (D-031, D-035).",
+  "type": "object",
+  "required": ["eventType", "gameId", "seq"],
+  "additionalProperties": true,
+  "properties": {
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "MESSAGE_POSTED",
+        "CHARACTER_ENTERED",
+        "CHARACTER_LEFT",
+        "CHARACTER_STEALTHED",
+        "CHARACTER_REVEALED",
+        "CHARACTER_APPEARED_LEFT",
+        "PLAYER_LEFT",
+        "CHAT_CREATED",
+        "TRANSITION_OPENED",
+        "TRANSITION_CLOSED",
+        "ITEM_MOVED",
+        "RESTRICTION_SET",
+        "RESTRICTION_REVOKED",
+        "TURN_OPENED",
+        "TURN_CLOSED",
+        "GAME_FINISHED"
+      ]
+    },
+    "messageKind": {
+      "type": "string",
+      "enum": ["SPEECH", "ACTION", "JOKE", "MASTER", "SYSTEM"]
+    },
+    "gameId": { "type": "string", "format": "uuid" },
+    "seq": { "type": "integer", "minimum": 1 },
+    "chatId": { "type": ["string", "null"], "format": "uuid" },
+    "characterId": { "type": ["string", "null"], "format": "uuid" },
+    "onBehalfOfMaster": { "type": "boolean" },
+    "payload": { "type": "object", "additionalProperties": true }
+  },
+  "allOf": [
+    {
+      "description": "Мета-событие игрового канала не содержит ни тела сообщения, ни имени говорящего (D-035).",
+      "if": {
+        "properties": { "channel": { "const": "GAME" } },
+        "required": ["channel"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["body"] },
+            { "required": ["speakerName"] }
+          ]
+        }
+      }
+    }
+  ]
+}

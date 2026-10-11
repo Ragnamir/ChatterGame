@@ -1,0 +1,8 @@
+# Профиль разработки: SMTP не нужен, подтверждение емейла автоматическое (D-079).
+chattergame:
+  mail:
+    auto-verify-email: true
+
+logging:
+  level:
+    com.chattergame: DEBUG
