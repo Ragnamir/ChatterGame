@@ -416,7 +416,11 @@ class E06CharacterTest extends E02TestSupport {
         assertThat(readField(refused, "code")).isEqualTo("chat_archived");
     }
 
-    /** Ни одна запись о персонаже не проходит мимо мастера (`D-065`). */
+    /**
+     * Ни одна запись о персонаже не проходит мимо мастера (`D-065`). Перемещение и скрытность
+     * тоже его: право игрока на них неотделимо от владения слотом, а слот — `E13`, поэтому
+     * здесь отказ, а не частичное разрешение (`D-107`, `D-108`).
+     */
     @Test
     void playerCannotWriteAnythingAboutCharacters() throws Exception {
         Fixture fixture = masterWithGame();
