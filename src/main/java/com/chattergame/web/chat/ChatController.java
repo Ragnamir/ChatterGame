@@ -6,7 +6,6 @@ import com.chattergame.chat.EdgeState;
 import com.chattergame.chat.GameGraph;
 import com.chattergame.chat.Transition;
 import com.chattergame.chat.TransitionState;
-import com.chattergame.character.Character;
 import com.chattergame.game.Game;
 import com.chattergame.game.GameMutationService;
 import com.chattergame.game.GameQueryService;
@@ -201,7 +200,7 @@ public class ChatController {
                 "reason", stored.reason() == null ? "" : stored.reason());
     }
 
-    // --- Граф и персонажи --------------------------------------------------------------
+    // --- Граф --------------------------------------------------------------
 
     /** Граф целиком: узлы и рёбра глазами запросившего (`PLAN` E04, задача 6). */
     @GetMapping("/graph")
@@ -211,14 +210,6 @@ public class ChatController {
             AuthContext context) {
         AuthContext auth = AuthContextResolver.require(context);
         return graph(graphIdReadable(auth, gameId), auth.user().id(), asCharacter);
-    }
-
-    @PostMapping("/characters")
-    public ResponseEntity<CharacterView> registerCharacter(
-            @PathVariable UUID gameId, @Valid @RequestBody CharacterRequest request, AuthContext context) {
-        AuthContext auth = AuthContextResolver.require(context);
-        Character character = mutations.registerCharacter(auth.user().id(), gameId, request.name());
-        return ResponseEntity.status(HttpStatus.CREATED).body(CharacterView.of(character));
     }
 
     private GameGraph graph(Game game, UUID userId, UUID asCharacter) {

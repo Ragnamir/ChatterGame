@@ -10,6 +10,8 @@ import com.chattergame.chat.TransitionState;
 import com.chattergame.chat.TransitionStateRepository;
 import com.chattergame.character.Character;
 import com.chattergame.character.CharacterRepository;
+import com.chattergame.character.Presence;
+import com.chattergame.character.PresenceRepository;
 import com.chattergame.journal.GameEventRepository;
 import com.chattergame.journal.GameEventType;
 import com.chattergame.journal.Payloads;
@@ -53,6 +55,7 @@ public class GameMutationService {
     private final TransitionRepository transitions;
     private final TransitionStateRepository edgeStates;
     private final CharacterRepository characters;
+    private final PresenceRepository presence;
     private final AssetRepository assets;
     private final AssetService assetService;
 
@@ -66,6 +69,7 @@ public class GameMutationService {
             TransitionRepository transitions,
             TransitionStateRepository edgeStates,
             CharacterRepository characters,
+            PresenceRepository presence,
             AssetRepository assets,
             AssetService assetService) {
         this.games = games;
@@ -77,6 +81,7 @@ public class GameMutationService {
         this.transitions = transitions;
         this.edgeStates = edgeStates;
         this.characters = characters;
+        this.presence = presence;
         this.assets = assets;
         this.assetService = assetService;
     }
@@ -539,18 +544,240 @@ public class GameMutationService {
         return stored;
     }
 
+    // --- Персонажи (E06) ---------------------------------------------------------------
+
     /**
-     * Заведение персонажа. На `E04` сущность нужна минимально — без неё нельзя привязать
-     * знание ребра (`REQUIREMENTS §8`); портрет, истории, занятость и скрытность делает `E06`.
+     * Заведение персонажа мастером (`REQUIREMENTS §9`, `D-020`). Карточка заполняется целиком
+     * одним вызовом: `createCharacter` без остальных полей — это персонаж, которого мастер
+     * завёл «на будущее», а событие `CHARACTER_CREATED` после этого соврало бы о содержимом.
      */
     @Transactional
-    public Character registerCharacter(UUID actorUserId, UUID gameId, String name) {
-        requireMaster(actorUserId, gameId);
-        requireText(name, "character_name_required", "Укажите имя персонажа", 200);
+    public Character createCharacter(
+            UUID actorUserId,
+            UUID gameId,
+            String name,
+            UUID portraitAssetId,
+            String appearance,
+            String publicHistory,
+            String privateHistory,
+            boolean playable,
+            boolean npc) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        requireText(name, "character_name_required", "Укажите имя персонажа", Character.NAME_MAX);
+        requirePortraitOfGame(gameId, portraitAssetId);
 
-        Character character = new Character(Uuids.v7(), gameId, name.strip(), null);
+        Character character = new Character(
+                Uuids.v7(),
+                gameId,
+                name.strip(),
+                portraitAssetId,
+                normalize(appearance),
+                normalize(publicHistory),
+                normalize(privateHistory),
+                playable,
+                npc,
+                null,
+                false,
+                null);
         characters.insert(character);
+        event(gameId, GameEventType.CHARACTER_CREATED, actorUserId,
+                payload("characterId", character.id().toString()));
         return character;
+    }
+
+    /**
+     * Правка карточки персонажа. Отдельный тип события от архивации: игроку показывается
+     * либо изменившийся персонаж, либо выведенный из игры, и одним событием эти случаи
+     * различить нельзя (`D-009`).
+     */
+    @Transactional
+    public Character updateCharacterCard(
+            UUID actorUserId,
+            UUID gameId,
+            UUID characterId,
+            String name,
+            UUID portraitAssetId,
+            String appearance,
+            String publicHistory,
+            String privateHistory,
+            boolean playable,
+            boolean npc) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Character character = requireCharacter(gameId, characterId);
+        requireText(name, "character_name_required", "Укажите имя персонажа", Character.NAME_MAX);
+        requirePortraitOfGame(gameId, portraitAssetId);
+
+        Character updated = new Character(
+                character.id(),
+                gameId,
+                name.strip(),
+                portraitAssetId,
+                normalize(appearance),
+                normalize(publicHistory),
+                normalize(privateHistory),
+                playable,
+                npc,
+                character.occupantMembershipId(),
+                character.archived(),
+                character.archivedReason());
+        characters.updateCard(updated);
+        event(gameId, GameEventType.CHARACTER_CONTENT_CHANGED, actorUserId,
+                payload("characterId", characterId.toString()));
+        return requireCharacter(gameId, characterId);
+    }
+
+    /**
+     * Архивирование персонажа — единственный способ убрать его из игры (`D-009`, `D-010`).
+     * Активное присутствие закрывается: архивированный персонаж не стоит ни в одной локации,
+     * иначе он остался бы в списках присутствующих живой игры, что и запрещает критерий
+     * приёмки `E06`. Строки `presence` при этом не удаляются — история остаётся (`D-008`).
+     *
+     * <p>Идемпотентно: повторный вызов не пишет второе событие и не меняет первую причину.
+     */
+    @Transactional
+    public Character archiveCharacter(
+            UUID actorUserId, UUID gameId, UUID characterId, String reason) {
+        Game game = requireMaster(actorUserId, gameId);
+        Character character = requireCharacter(gameId, characterId);
+        if (character.archived()) {
+            return character;
+        }
+        requireText(reason, "archive_reason_required", "Укажите причину архивации", 500);
+
+        presence.findActive(characterId).ifPresent(active -> presence.close(active.id()));
+        characters.markArchived(characterId, reason.strip());
+        event(gameId, GameEventType.CHARACTER_ARCHIVED, actorUserId,
+                payload("characterId", characterId.toString()));
+        return requireCharacter(gameId, characterId);
+    }
+
+    /** Отказ на удаление персонажа; причина отказа та же, что у локации (`D-010`, `D-103`). */
+    @Transactional(readOnly = true)
+    public void rejectCharacterDeletion(UUID actorUserId, UUID gameId, UUID characterId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireCharacter(gameId, characterId);
+        throw deletionRefused(game, "персонажа", "character_not_deletable");
+    }
+
+    /**
+     * Размещение и перемещение персонажа (`REQUIREMENTS §9`: стартовое размещение задаёт
+     * мастер). Мастер перемещает всегда и без проверки перехода: «перемещение только по
+     * `AVAILABLE` переходу» адресовано игроку (`REQUIREMENTS §8`), а право игрока идти
+     * своим персонажем появляется вместе с занятостью, то есть на `E13` (`D-102`). Проверять
+     * здесь переход было бы нечего: у вызвавшего всегда есть право мастера.
+     *
+     * <p>Уход и вход — две записи одной транзакции: присутствие не переписывается, прежняя
+     * строка закрывается (`D-007`). События два, потому что для читающего ленты это разные
+     * сообщения: «ушёл» и «появился».
+     */
+    @Transactional
+    public Presence placeCharacter(
+            UUID actorUserId, UUID gameId, UUID characterId, UUID chatId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Character character = requireCharacter(gameId, characterId);
+        if (character.archived()) {
+            throw ApiException.conflict(
+                    "character_archived", "Персонаж выведен из игры: сначала снимите архивацию");
+        }
+        Chat location = requireLocation(gameId, chatId);
+        if (location.archived()) {
+            throw ApiException.conflict(
+                    "chat_archived", "Локация выведена из игры: перемещение в неё запрещено");
+        }
+
+        Presence current = presence.findActive(characterId).orElse(null);
+        if (current != null && current.chatId().equals(location.id())) {
+            return current;
+        }
+        if (current != null) {
+            presence.close(current.id());
+            event(gameId, GameEventType.CHARACTER_LEFT, actorUserId, placementPayload(characterId, current));
+        }
+        // Скрытность переезжает вместе с персонажем: иначе перемещение скрытого персонажа
+        // молча показало бы его всем в новой локации (`D-007`).
+        boolean hidden = current != null && current.hidden();
+        Presence placed = new Presence(Uuids.v7(), characterId, location.id(), hidden, Instant.now(), null);
+        presence.insert(placed);
+        event(gameId, GameEventType.CHARACTER_ENTERED, actorUserId, placementPayload(characterId, placed));
+        return placed;
+    }
+
+    /**
+     * Вход в скрытность и выход из неё (`D-006`). Ведёт мастер: вход требует его разрешения,
+     * а выход свободен и для игрока — вторая половина появится вместе с занятостью, потому
+     * что «свой персонаж» на `E06` ещё не определён (`D-102`).
+     *
+     * <p>Уход публично видимого персонажа оставляет ещё одно событие —
+     * `CHARACTER_APPEARED_LEFT`: для остальных он «отобразился как ушедший» (`D-007`), а не
+     * пропал из ответа молча. Для скрытого с самого начала такого события нет: посторонние
+     * его не видели, показывать им нечего.
+     *
+     * <p>Идемпотентно: повторное скрытие не пишет второе событие, иначе журнал показывал бы
+     * уход там, где ничего не менялось.
+     */
+    @Transactional
+    public Presence setCharacterStealth(
+            UUID actorUserId, UUID gameId, UUID characterId, boolean hidden, String reason) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        requireCharacter(gameId, characterId);
+        Presence current = presence.findActive(characterId)
+                .orElseThrow(() -> ApiException.conflict(
+                        "character_not_placed", "Персонаж нигде не находится: скрытность не к чему применить"));
+        if (current.hidden() == hidden) {
+            return current;
+        }
+
+        presence.setHidden(current.id(), hidden);
+        Presence stored = presence.findActive(characterId).orElseThrow();
+        event(gameId,
+                hidden ? GameEventType.CHARACTER_STEALTHED : GameEventType.CHARACTER_REVEALED,
+                actorUserId,
+                stealthPayload(characterId, current.chatId(), reason, hidden));
+        if (hidden) {
+            event(gameId, GameEventType.CHARACTER_APPEARED_LEFT, actorUserId,
+                    stealthPayload(characterId, current.chatId(), reason, true));
+        }
+        return stored;
+    }
+
+    private Map<String, Object> placementPayload(UUID characterId, Presence placed) {
+        Map<String, Object> payload = payload("characterId", characterId.toString());
+        payload.put("chatId", placed.chatId().toString());
+        if (placed.hidden()) {
+            payload.put("hidden", true);
+        }
+        return payload;
+    }
+
+    private Map<String, Object> stealthPayload(
+            UUID characterId, UUID chatId, String reason, boolean hidden) {
+        Map<String, Object> payload = payload("characterId", characterId.toString());
+        payload.put("chatId", chatId.toString());
+        payload.put("hidden", hidden);
+        if (reason != null && !reason.isBlank()) {
+            payload.put("reason", reason.strip());
+        }
+        return payload;
+    }
+
+    /**
+     * Портрет обязан быть ассетом этой же игры: иначе через карточку персонажа можно было бы
+     * сослаться на чужую картинку, а проверка участия на отдаче смотрит на игру ассета
+     * (`D-075`), и карточка показывала бы 404 вместо отказа.
+     */
+    private void requirePortraitOfGame(UUID gameId, UUID portraitAssetId) {
+        if (portraitAssetId == null) {
+            return;
+        }
+        Asset asset = assets.findById(portraitAssetId)
+                .orElseThrow(() -> ApiException.notFound("asset_not_found", "Ассет не найден"));
+        if (!asset.gameId().equals(gameId)) {
+            throw ApiException.badRequest("asset_other_game", "Ассет принадлежит другой игре");
+        }
     }
 
     /**
@@ -575,6 +802,16 @@ public class GameMutationService {
             throw ApiException.badRequest("chat_not_location", "Этот чат не является локацией");
         }
         return chat;
+    }
+
+    /** Персонаж этой игры; чужой отдаётся как отсутствующий, чтобы не выдать его существование. */
+    private Character requireCharacter(UUID gameId, UUID characterId) {
+        Character character = characters.findById(characterId)
+                .orElseThrow(() -> ApiException.notFound("character_not_found", "Персонаж не найден"));
+        if (!character.gameId().equals(gameId)) {
+            throw ApiException.notFound("character_not_found", "Персонаж не найден");
+        }
+        return character;
     }
 
     private Transition requireTransition(UUID gameId, UUID transitionId) {

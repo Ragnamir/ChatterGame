@@ -542,10 +542,11 @@ paths:
     post:
       summary: Заведение персонажа мастером
       description: |
-        На `E04` заводится минимальный персонаж — без него нельзя привязать знание ребра
-        (`D-103`). Портрет, истории, занятость и скрытность — `E06`.
-      operationId: registerCharacter
-      tags: [chat]
+        Карточка пишется целиком: частичная правка расходится со снимком, который уже
+        читают клиенты. Создаёт только мастер (`D-020`), событие — `CHARACTER_CREATED`
+        (`D-033`).
+      operationId: createCharacter
+      tags: [character]
       security:
         - sessionCookie: []
       requestBody:
@@ -559,6 +560,176 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Character' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: Персонажи игры
+      description: |
+        Скрытый персонаж у чужого игрока не появляется в ответе вовсе, а не приходит
+        помеченным (`REQUIREMENTS §7.1`). Закрытая история заполнена только мастеру и
+        играющему игроку (`REQUIREMENTS §9`). До `READY` архивный персонаж игроку не
+        показывается, после — «выведен из игры» с причиной (`D-009`).
+      operationId: listCharacters
+      tags: [character]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Список персонажей глазами запросившего
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Character' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/characters/{characterId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      summary: Карточка персонажа
+      description: Чужой персонаж отдаётся как отсутствующий, чтобы не выдать его существование.
+      operationId: readCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Карточка глазами запросившего
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Правка карточки персонажа
+      description: Только мастер; событие `CHARACTER_CONTENT_CHANGED` (`D-033`).
+      operationId: updateCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CharacterRequest' }
+      responses:
+        '200':
+          description: Карточка обновлена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Удаление персонажа (всегда отказ)
+      description: |
+        Физического удаления нет ни до, ни после `READY` (`D-009`, `D-010`); ответ —
+        `409` с кодом `character_not_deletable` и подсказкой про архивацию.
+      operationId: deleteCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      responses:
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters/{characterId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    post:
+      summary: Архивирование персонажа
+      description: |
+        Единственный способ убрать персонажа из игры (`D-009`). Активное присутствие
+        закрывается, поэтому архивированный персонаж не остаётся в списках присутствующих
+        живой игры. Идемпотентно. Событие — `CHARACTER_ARCHIVED`.
+      operationId: archiveCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveRequest' }
+      responses:
+        '200':
+          description: Персонаж выведен из игры
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters/{characterId}/location:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    put:
+      summary: Размещение и перемещение персонажа
+      description: |
+        `PUT`, а не `POST`: вызов задаёт итоговое положение, и повтор ничего не меняет.
+        Мастер перемещает кого угодно куда угодно (`REQUIREMENTS §8`); право игрока идти
+        своим персонажем по `AVAILABLE` переходу появляется вместе с занятостью (`E13`,
+        `D-102`). События — `CHARACTER_LEFT` при уходе и `CHARACTER_ENTERED` при входе.
+      operationId: placeCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlacementRequest' }
+      responses:
+        '200':
+          description: Положение установлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Placement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters/{characterId}/stealth:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    put:
+      summary: Скрытность персонажа
+      description: |
+        Вход требует разрешения мастера, выход свободен (`D-006`); вторая половина —
+        вместе с занятостью на `E13` (`D-102`). Уход публично видимого персонажа оставляет
+        ещё событие `CHARACTER_APPEARED_LEFT`: для остальных он «отобразился как ушедший»
+        (`D-007`). Идемпотентно.
+      operationId: setCharacterStealth
+      tags: [character]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StealthRequest' }
+      responses:
+        '200':
+          description: Состояние скрытности сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Placement' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -885,6 +1056,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    CharacterId:
+      name: characterId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     ChatId:
       name: chatId
       in: path
@@ -1197,25 +1373,84 @@ components:
         reason: { type: string }
     CharacterRequest:
       type: object
+      description: |
+        Карточка целиком (`REQUIREMENTS §9`). Поля видимости неодинаковы, но пишет их
+        мастер одним запросом: частичная правка расходится со снимком у читателей.
       required: [name]
       properties:
         name: { type: string, maxLength: 200 }
+        portraitAssetId: { type: [string, 'null'], format: uuid }
+        appearance: { type: [string, 'null'] }
+        publicHistory: { type: [string, 'null'] }
+        privateHistory: { type: [string, 'null'] }
+        playable: { type: boolean }
+        npc: { type: boolean }
     Character:
       type: object
+      description: |
+        Карточка глазами запросившего. `privateHistory` заполнен только мастеру и
+        играющему игроку, `hidden` — только мастеру; игроку скрытый персонаж не приходит
+        вовсе (`D-030`).
       required: [id, gameId, name]
       properties:
         id: { type: string, format: uuid }
         gameId: { type: string, format: uuid }
         name: { type: string }
+        portraitAssetId: { type: [string, 'null'], format: uuid }
+        appearance: { type: [string, 'null'] }
+        publicHistory: { type: [string, 'null'] }
+        privateHistory: { type: [string, 'null'] }
+        playable: { type: boolean }
+        npc: { type: boolean }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        hidden: { type: boolean }
+        mine: { type: boolean }
+    PlacementRequest:
+      type: object
+      required: [chatId]
+      properties:
+        chatId: { type: string, format: uuid }
+    StealthRequest:
+      type: object
+      required: [hidden]
+      properties:
+        hidden: { type: boolean }
+        reason: { type: [string, 'null'] }
+    Placement:
+      type: object
+      required: [characterId, chatId, hidden]
+      properties:
+        characterId: { type: string, format: uuid }
+        chatId: { type: string, format: uuid }
+        hidden: { type: boolean }
+    PresentCharacter:
+      type: object
+      description: |
+        Персонаж в списке присутствующих. `hidden` заполнен только для мастера: игроку
+        скрытый персонаж не приходит вовсе (`REQUIREMENTS §7.1`).
+      required: [id, name, hidden]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        portraitAssetId: { type: [string, 'null'], format: uuid }
+        hidden: { type: boolean }
     GraphNode:
       type: object
-      required: [id, title, archived]
+      description: |
+        Локация глазами смотрящего. `present` — присутствующие персонажи (`E06`), приходят
+        вместе с узлом, а не отдельным запросом: второй read-путь к тем же строкам
+        разошёлся бы с первым (`D-030`).
+      required: [id, title, archived, present]
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
         description: { type: [string, 'null'] }
         archived: { type: boolean }
         archivedReason: { type: [string, 'null'] }
+        present:
+          type: array
+          items: { $ref: '#/components/schemas/PresentCharacter' }
     GraphEdge:
       type: object
       description: |

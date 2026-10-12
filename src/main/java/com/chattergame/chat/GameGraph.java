@@ -1,5 +1,7 @@
 package com.chattergame.chat;
 
+import com.chattergame.character.PresentCharacter;
+
 import java.util.List;
 import java.util.UUID;
 
@@ -25,13 +27,23 @@ public record GameGraph(List<Node> nodes, List<Edge> edges) {
     /**
      * Локация глазами смотрящего. `archivedReason` заполнен, когда локация архивирована:
      * клиент показывает текст причины, а не пустое место.
+     *
+     * <p>`present` — список присутствующих персонажей (`E06`). Он приходит вместе с узлом,
+     * а не отдельным запросом, потому что «кто здесь» — часть картины мира, и второй
+     * read-путь к тем же строкам разошёлся бы с первым при первом изменении правила
+     * видимости (`D-030`). Скрытый персонаж у чужого игрока отсутствует в списке.
      */
     public record Node(
             UUID id,
             String title,
             String description,
             boolean archived,
-            String archivedReason) {
+            String archivedReason,
+            List<PresentCharacter> present) {
+
+        public Node {
+            present = List.copyOf(present);
+        }
     }
 
     /**

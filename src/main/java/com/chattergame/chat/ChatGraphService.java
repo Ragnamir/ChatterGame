@@ -1,7 +1,9 @@
 package com.chattergame.chat;
 
 import com.chattergame.character.Character;
+import com.chattergame.character.CharacterQueryService;
 import com.chattergame.character.CharacterRepository;
+import com.chattergame.character.PresentCharacter;
 import com.chattergame.game.Game;
 import com.chattergame.game.Membership;
 import com.chattergame.game.MembershipRepository;
@@ -35,6 +37,7 @@ public class ChatGraphService {
     private final TransitionRepository transitions;
     private final TransitionStateRepository edgeStates;
     private final CharacterRepository characters;
+    private final CharacterQueryService characterReads;
     private final MembershipRepository memberships;
 
     public ChatGraphService(
@@ -42,11 +45,13 @@ public class ChatGraphService {
             TransitionRepository transitions,
             TransitionStateRepository edgeStates,
             CharacterRepository characters,
+            CharacterQueryService characterReads,
             MembershipRepository memberships) {
         this.chats = chats;
         this.transitions = transitions;
         this.edgeStates = edgeStates;
         this.characters = characters;
+        this.characterReads = characterReads;
         this.memberships = memberships;
     }
 
@@ -73,6 +78,9 @@ public class ChatGraphService {
                 .collect(Collectors.toSet());
 
         List<GameGraph.Node> nodes = new ArrayList<>();
+        // Присутствующие собираются одним запросом на игру: граф отдаётся целиком, и запрос
+        // на каждую локацию отдельно превратил бы один ответ клиенту в полсотни запросов к базе.
+        Map<UUID, List<PresentCharacter>> present = characterReads.presentByChat(game.id(), master, viewAs);
         for (Chat location : locations) {
             // До READY архивная локация для игрока не существует вовсе: он не должен узнать,
             // что мастер что-то заводил и передумал (`D-009`).
@@ -84,7 +92,8 @@ public class ChatGraphService {
                     location.title(),
                     location.description(),
                     location.archived(),
-                    location.archivedReason()));
+                    location.archivedReason(),
+                    present.getOrDefault(location.id(), List.of())));
         }
 
         List<GameGraph.Edge> edges = new ArrayList<>();

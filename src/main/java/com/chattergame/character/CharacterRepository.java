@@ -1,26 +1,33 @@
 package com.chattergame.character;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Доступ к `character`. На `E04` открыты только вставка и чтение по идентификатору: знание
- * перехода привязано к персонажу (`REQUIREMENTS §8`), и без строки персонажа тест на двух
- * персонажей с разными знаниями не поставить (`D-103`).
+ * Доступ к `character`. Удаления нет: персонаж архивируется с причиной и остаётся читаемым
+ * (`D-009`, `D-010`). Методы записи вызываются из {@code GameMutationService}, а не из
+ * контроллеров.
  *
- * <p>Полный CRUD, занятость и скрытность появятся на `E06`; здесь их нет, чтобы этап не
- * завёл вторую реализацию тех же правил.
+ * <p>Карточка читается и пишется целиком, потому что видимость её полей решается на
+ * читающем слое: если бы репозиторий отдавал «безопасную» проекцию, правило видимости
+ * разъехалось бы по всем запросам (`D-030`).
  */
 @Repository
 public class CharacterRepository {
 
-    private static final String COLUMNS = "id, game_id, name, occupant_membership_id";
+    private static final String COLUMNS =
+            "id, game_id, name, portrait_asset_id, appearance, public_history, private_history, "
+                    + "playable, npc, occupant_membership_id, archived, archived_reason";
 
     private final JdbcTemplate jdbc;
+    private final RowMapper<Character> mapper = this::map;
 
     public CharacterRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -28,21 +35,25 @@ public class CharacterRepository {
 
     public void insert(Character character) {
         jdbc.update(
-                "INSERT INTO character (id, game_id, name) VALUES (?, ?, ?)",
+                "INSERT INTO character (id, game_id, name, portrait_asset_id, appearance, "
+                        + "public_history, private_history, playable, npc, occupant_membership_id, "
+                        + "archived, archived_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 character.id(),
                 character.gameId(),
-                character.name());
+                character.name(),
+                character.portraitAssetId(),
+                character.appearance(),
+                character.publicHistory(),
+                character.privateHistory(),
+                character.playable(),
+                character.npc(),
+                character.occupantMembershipId(),
+                character.archived(),
+                character.archivedReason());
     }
 
     public Optional<Character> findById(UUID id) {
-        return jdbc.query(
-                        "SELECT " + COLUMNS + " FROM character WHERE id = ?",
-                        (rs, rowNum) -> new Character(
-                                rs.getObject("id", UUID.class),
-                                rs.getObject("game_id", UUID.class),
-                                rs.getString("name"),
-                                rs.getObject("occupant_membership_id", UUID.class)),
-                        id)
+        return jdbc.query("SELECT " + COLUMNS + " FROM character WHERE id = ?", mapper, id)
                 .stream()
                 .findFirst();
     }
@@ -50,11 +61,59 @@ public class CharacterRepository {
     public List<Character> findByGame(UUID gameId) {
         return jdbc.query(
                 "SELECT " + COLUMNS + " FROM character WHERE game_id = ? ORDER BY created_at, id",
-                (rs, rowNum) -> new Character(
-                        rs.getObject("id", UUID.class),
-                        rs.getObject("game_id", UUID.class),
-                        rs.getString("name"),
-                        rs.getObject("occupant_membership_id", UUID.class)),
+                mapper,
                 gameId);
+    }
+
+    /**
+     * Блокировка строки персонажа на время транзакции. Нужна занятию (`D-100`): без неё два
+     * игрока прочитают «свободен» одновременно и оба запишут себя владельцем. Блокировка
+     * строки, а не `SELECT ... FOR UPDATE` по участию: слот — это персонаж, и сериализуется
+     * ровно он.
+     */
+    public Optional<Character> lockById(UUID id) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM character WHERE id = ? FOR UPDATE", mapper, id)
+                .stream()
+                .findFirst();
+    }
+
+    /** Обновление карточки целиком: частичная запись полей разошлась бы со снимком у читателей. */
+    public void updateCard(Character character) {
+        jdbc.update(
+                "UPDATE character SET name = ?, portrait_asset_id = ?, appearance = ?, "
+                        + "public_history = ?, private_history = ?, playable = ?, npc = ?, "
+                        + "updated_at = now() WHERE id = ?",
+                character.name(),
+                character.portraitAssetId(),
+                character.appearance(),
+                character.publicHistory(),
+                character.privateHistory(),
+                character.playable(),
+                character.npc(),
+                character.id());
+    }
+
+    public void markArchived(UUID id, String reason) {
+        jdbc.update(
+                "UPDATE character SET archived = true, archived_reason = ?, updated_at = now() "
+                        + "WHERE id = ?",
+                reason,
+                id);
+    }
+
+    private Character map(ResultSet rs, int rowNum) throws SQLException {
+        return new Character(
+                rs.getObject("id", UUID.class),
+                rs.getObject("game_id", UUID.class),
+                rs.getString("name"),
+                rs.getObject("portrait_asset_id", UUID.class),
+                rs.getString("appearance"),
+                rs.getString("public_history"),
+                rs.getString("private_history"),
+                rs.getBoolean("playable"),
+                rs.getBoolean("npc"),
+                rs.getObject("occupant_membership_id", UUID.class),
+                rs.getBoolean("archived"),
+                rs.getString("archived_reason"));
     }
 }

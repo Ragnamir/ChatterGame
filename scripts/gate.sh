@@ -178,6 +178,33 @@ case "$stage" in
       echo "  ok: E05 — медиа отдаётся приложением, статики нет"
     fi
     ;;
+  E06)
+    if grep -rqE '@RestController' src/main/java/com/chattergame/web/chat; then
+      echo "  ok: E06 — веб-слой персонажей на месте"
+    else
+      fail=1
+      echo "FAIL: E06 требует эндпоинты персонажей, присутствия и скрытности"
+    fi
+    # PLAN E06: реальное время — предмет E09, а «мгновенное обновление» этапа идёт событиями.
+    # Проверка адресная, чтобы реалтайм не проехал вместе с этапом, как и на E03.
+    realtime=$(grep -rlE '@MessageMapping|WebSocketHandler|EnableWebSocket' \
+      src/main/java 2>/dev/null || true)
+    if [ -n "$realtime" ]; then
+      fail=1
+      echo "FAIL: E06 — WebSocket и сообщения вне объёма этапа:"
+      echo "$realtime"
+    else
+      echo "  ok: E06 — реалтайм отсутствует, обновление идёт событиями"
+    fi
+    # Присутствие и скрытность — состояния персонажа, а не поля графа: план E06 запрещает
+    # заводить под них отдельные таблицы, контракт знает `presence` (`D-103`, `expected-tables.txt`).
+    if [ -f src/main/resources/db/changelog/changes/003-e06.yaml ]; then
+      echo "  ok: E06 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E06 требует changes/003-e06.yaml (присутствие и его ограничения)"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

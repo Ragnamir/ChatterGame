@@ -1,0 +1,44 @@
+databaseChangeLog:
+  # E06: присутствие и скрытность. Применённые `001-baseline.yaml` и `002-e04.yaml` не
+  # редактируются никогда (`AGENTS §1`).
+  #
+  # Таблиц `occupancy` и `stealth_state` из `PLAN` E06 нет и не заводится: в контракте
+  # `contract/expected-tables.txt` живёт `presence`, а у неё уже есть `hidden`, `joined_at`
+  # и `left_at`. Имя таблицы в `PLAN` — ориентир, источник истины — `REQUIREMENTS` (`D-103`).
+
+  - changeSet:
+      id: 003-01-presence-single-active
+      author: e06
+      changes:
+        # Персонаж стоит ровно в одной локации: без этого двухфазное перемещение
+        # (закрыть прежнюю строку, открыть новую) при двух параллельных запросах оставило бы
+        # его в двух местах сразу, и никакая проверка в сервисе этого не поймает.
+        # Индекс частичный — `where left_at is null`. Обычный unique по `character_id` запретил
+        # бы всю историю уходов (`D-007`), а `createIndex` в Liquibase предикат молча
+        # игнорирует: именно так этот unique и был создан полным, и второе перемещение
+        # персонажа упало на своём же ограничении. Поэтому — `sql`.
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_presence_active_character ON presence (character_id) WHERE left_at IS NULL
+            rollback: DROP INDEX ux_presence_active_character
+
+  - changeSet:
+      id: 003-02-presence-active-chat
+      author: e06
+      changes:
+        # Список присутствующих читается по активным строкам локации; индекс по `chat_id`
+        # из baseline покрывает и историю, но активные строки составляют почти весь запрос.
+        - sql:
+            sql: CREATE INDEX ix_presence_active_chat ON presence (chat_id) WHERE left_at IS NULL
+            rollback: DROP INDEX ix_presence_active_chat
+
+  - changeSet:
+      id: 003-03-character-archived-reason
+      author: e06
+      changes:
+        # Причина архивации персонажа. Колонка `archived` есть уже в baseline, но у локации
+        # и перехода причина лежит рядом (`002-e04.yaml`), и персонаж не исключение: архив
+        # без причины клиенту показывать нечего (`D-009`).
+        - addColumn:
+            tableName: character
+            columns:
+              - column: { name: archived_reason, type: varchar(500) }

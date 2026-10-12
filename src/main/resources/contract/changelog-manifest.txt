@@ -8,3 +8,4 @@
 # выкатывался, — и это требует явного решения, а не тихой правки.
 4bd645a3d15025586b78d0ac35a98af3cee380164ce56b8873c5fd1b5af9b749  db/changelog/changes/001-baseline.yaml
 d5229e4b58d3ce133e7a24fffb3adec1cb10427b10c7f40dc92ee63fe8bac389  db/changelog/changes/002-e04.yaml
+1b58091d945f80bd3745d54ce54701e9c944616bbbb7574b0231267825b928ce  db/changelog/changes/003-e06.yaml
