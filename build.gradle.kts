@@ -32,6 +32,10 @@ dependencies {
     // серверная сессия вместо фильтр-цепочки Spring Security.
     implementation("org.springframework.security:spring-security-crypto")
     implementation("org.bouncycastle:bcprov-jdk18on:1.81")
+    // WebP в whitelist `REQUIREMENTS §19` требует настоящего декодирования (`D-076`), а JDK
+    // `ImageIO` его не читает вовсе: проверено — `webp readable: false`. Плагин закрывает
+    // ровно этот формат (`D-105`); остальные три читает JDK.
+    implementation("com.twelvemonkeys.imageio:imageio-webp:3.15.3")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

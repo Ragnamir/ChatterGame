@@ -1,8 +1,21 @@
 package com.chattergame.game;
 
+import com.chattergame.chat.Chat;
+import com.chattergame.chat.ChatKind;
+import com.chattergame.chat.ChatRepository;
+import com.chattergame.chat.EdgeState;
+import com.chattergame.chat.Transition;
+import com.chattergame.chat.TransitionRepository;
+import com.chattergame.chat.TransitionState;
+import com.chattergame.chat.TransitionStateRepository;
+import com.chattergame.character.Character;
+import com.chattergame.character.CharacterRepository;
 import com.chattergame.journal.GameEventRepository;
 import com.chattergame.journal.GameEventType;
 import com.chattergame.journal.Payloads;
+import com.chattergame.media.Asset;
+import com.chattergame.media.AssetRepository;
+import com.chattergame.media.AssetService;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
 import org.springframework.stereotype.Service;
@@ -36,18 +49,36 @@ public class GameMutationService {
     private final GameEventRepository events;
     private final Payloads payloads;
     private final ReadinessValidation readiness;
+    private final ChatRepository chats;
+    private final TransitionRepository transitions;
+    private final TransitionStateRepository edgeStates;
+    private final CharacterRepository characters;
+    private final AssetRepository assets;
+    private final AssetService assetService;
 
     public GameMutationService(
             GameRepository games,
             MembershipRepository memberships,
             GameEventRepository events,
             Payloads payloads,
-            ReadinessValidation readiness) {
+            ReadinessValidation readiness,
+            ChatRepository chats,
+            TransitionRepository transitions,
+            TransitionStateRepository edgeStates,
+            CharacterRepository characters,
+            AssetRepository assets,
+            AssetService assetService) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
         this.payloads = payloads;
         this.readiness = readiness;
+        this.chats = chats;
+        this.transitions = transitions;
+        this.edgeStates = edgeStates;
+        this.characters = characters;
+        this.assets = assets;
+        this.assetService = assetService;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -274,6 +305,285 @@ public class GameMutationService {
             case LEFT -> GameEventType.MEMBERSHIP_LEFT;
             case BANNED -> GameEventType.MEMBERSHIP_BANNED;
         };
+    }
+
+    // --- Локации и переходы (E04) ------------------------------------------------------
+
+    /**
+     * Создание локации (`REQUIREMENTS §7.1`). Работает и после `READY`: мастер достраивает
+     * мир по ходу игры, и запрет на это в документах не заявлен.
+     */
+    @Transactional
+    public Chat createLocation(UUID actorUserId, UUID gameId, String title, String description) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        requireText(title, "title_required", "Укажите название локации", Chat.TITLE_MAX);
+
+        Instant now = Instant.now();
+        Chat chat = new Chat(
+                Uuids.v7(),
+                gameId,
+                ChatKind.LOCATION,
+                title.strip(),
+                normalize(description),
+                null,
+                false,
+                null,
+                null,
+                now);
+        chats.insert(chat);
+        Map<String, Object> payload = payload("chatId", chat.id().toString());
+        payload.put("kind", chat.kind().name());
+        payload.put("title", chat.title());
+        event(gameId, GameEventType.CHAT_CREATED, actorUserId, payload);
+        return chat;
+    }
+
+    /** Правка названия и описания локации. Посторонние поля остаются как были. */
+    @Transactional
+    public Chat updateLocation(
+            UUID actorUserId, UUID gameId, UUID chatId, String title, String description) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Chat chat = requireLocation(gameId, chatId);
+        requireText(title, "title_required", "Укажите название локации", Chat.TITLE_MAX);
+
+        chats.updateContent(chatId, title.strip(), normalize(description));
+        event(gameId, GameEventType.CHAT_CONTENT_CHANGED, actorUserId,
+                payload("chatId", chatId.toString()));
+        return chats.findById(chat.id()).orElseThrow();
+    }
+
+    /**
+     * Архивирование локации. Единственный способ «убрать место»: удаление запрещено навсегда
+     * (`D-010`). Идемпотентно — повторный вызов не пишет второе событие.
+     */
+    @Transactional
+    public Chat archiveLocation(UUID actorUserId, UUID gameId, UUID chatId, String reason) {
+        requireMaster(actorUserId, gameId);
+        Chat chat = requireLocation(gameId, chatId);
+        if (chat.archived()) {
+            return chat;
+        }
+        requireText(reason, "archive_reason_required", "Укажите причину архивации", 500);
+
+        chats.markArchived(chatId, reason.strip());
+        event(gameId, GameEventType.CHAT_ARCHIVED, actorUserId,
+                payload("chatId", chatId.toString()));
+        return chats.findById(chatId).orElseThrow();
+    }
+
+    /**
+     * Установка или снятие картинки локации (`D-106`). `null` — снятие.
+     *
+     * <p>Ассет обязан принадлежать этой же игре: проверка участия на отдаче пропустила бы
+     * чужую картинку, привязанную к своей локации, потому что участие проверяется по игре
+     * локации, а не по игре ассета.
+     *
+     * <p>Прежняя картинка снимается тем же вызовом: `D-077` требует «записать новый,
+     * переключить указатель, удалить старый», иначе замещённые файлы занимают диск навсегда.
+     * Удаление идёт после переключения и в этой же транзакции — при откате картинка остаётся
+     * в прежней ссылке вместе с файлом.
+     */
+    @Transactional
+    public Chat setLocationImage(UUID actorUserId, UUID gameId, UUID chatId, UUID assetId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Chat chat = requireLocation(gameId, chatId);
+
+        if (assetId != null) {
+            Asset asset = assets.findById(assetId)
+                    .orElseThrow(() -> ApiException.notFound("asset_not_found", "Ассет не найден"));
+            if (!asset.gameId().equals(gameId)) {
+                throw ApiException.badRequest(
+                        "asset_other_game", "Ассет принадлежит другой игре");
+            }
+        }
+
+        UUID previous = chat.imageAssetId();
+        chats.updateImage(chatId, assetId);
+
+        Map<String, Object> payload = payload("chatId", chatId.toString());
+        payload.put("assetId", assetId == null ? null : assetId.toString());
+        event(gameId, GameEventType.CHAT_CONTENT_CHANGED, actorUserId, payload);
+
+        if (previous != null && !previous.equals(assetId)) {
+            assetService.releaseIfUnreferenced(previous);
+        }
+        return chats.findById(chatId).orElseThrow();
+    }
+
+    /**
+     * Отказ на удаление локации. Удаления нет ни до, ни после `READY` (`D-010`, `D-103`),
+     * но до `READY` отказ называет замену («архивация»), потому что мастер ждёт подсказки.
+     * Право мастера проверяется до отказа: чужой не должен узнать о существовании локации.
+     */
+    @Transactional(readOnly = true)
+    public void rejectLocationDeletion(UUID actorUserId, UUID gameId, UUID chatId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireLocation(gameId, chatId);
+        throw deletionRefused(game, "локации", "chat_not_deletable");
+    }
+
+    /**
+     * Создание ориентированного перехода (`REQUIREMENTS §8`). Симметричность мастер задаёт
+     * двумя рёбрами: подставить обратное ребро автоматически значило бы решить за него.
+     */
+    @Transactional
+    public Transition createTransition(
+            UUID actorUserId, UUID gameId, UUID fromChatId, UUID toChatId, String title) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        if (fromChatId == null || toChatId == null) {
+            throw ApiException.badRequest("transition_endpoint_required", "Укажите обе локации перехода");
+        }
+        if (fromChatId.equals(toChatId)) {
+            throw ApiException.badRequest("transition_same_location", "Переход не может вести в ту же локацию");
+        }
+        requireLocation(gameId, fromChatId);
+        requireLocation(gameId, toChatId);
+        if (title != null && title.strip().length() > Transition.TITLE_MAX) {
+            throw ApiException.badRequest(
+                    "title_too_long", "Название перехода: до " + Transition.TITLE_MAX + " знаков");
+        }
+
+        Instant now = Instant.now();
+        Transition transition = new Transition(
+                Uuids.v7(), gameId, fromChatId, toChatId, normalize(title), false, null, null, now);
+        transitions.insert(transition);
+
+        Map<String, Object> payload = payload("transitionId", transition.id().toString());
+        payload.put("fromChatId", fromChatId.toString());
+        payload.put("toChatId", toChatId.toString());
+        event(gameId, GameEventType.TRANSITION_OPENED, actorUserId, payload);
+        return transition;
+    }
+
+    /** Переименование перехода. Состояния рёбер не трогает: они про знание, а не про название. */
+    @Transactional
+    public Transition renameTransition(
+            UUID actorUserId, UUID gameId, UUID transitionId, String title) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Transition transition = requireTransition(gameId, transitionId);
+        if (title != null && title.strip().length() > Transition.TITLE_MAX) {
+            throw ApiException.badRequest(
+                    "title_too_long", "Название перехода: до " + Transition.TITLE_MAX + " знаков");
+        }
+        transitions.updateTitle(transitionId, normalize(title));
+        return transitions.findById(transition.id()).orElseThrow();
+    }
+
+    /** Архивирование перехода; идемпотентно, как и архивация локации. */
+    @Transactional
+    public Transition archiveTransition(
+            UUID actorUserId, UUID gameId, UUID transitionId, String reason) {
+        requireMaster(actorUserId, gameId);
+        Transition transition = requireTransition(gameId, transitionId);
+        if (transition.archived()) {
+            return transition;
+        }
+        requireText(reason, "archive_reason_required", "Укажите причину архивации", 500);
+
+        transitions.markArchived(transitionId, reason.strip());
+        event(gameId, GameEventType.TRANSITION_ARCHIVED, actorUserId,
+                payload("transitionId", transitionId.toString()));
+        return transitions.findById(transitionId).orElseThrow();
+    }
+
+    /** Отказ на удаление перехода; причина отказа та же, что у локации (`D-103`). */
+    @Transactional(readOnly = true)
+    public void rejectTransitionDeletion(UUID actorUserId, UUID gameId, UUID transitionId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireTransition(gameId, transitionId);
+        throw deletionRefused(game, "перехода", "transition_not_deletable");
+    }
+
+    /**
+     * Знание ребра конкретным персонажем (`REQUIREMENTS §8`). Мастер ведёт его по персонажу
+     * осознанно: `UNKNOWN → KNOWN_UNAVAILABLE` не открывается сам при входе в локацию, иначе
+     * туман войны выдал бы переходы, которых игрок видеть не должен (`D-103`).
+     *
+     * <p>Причина обязательна для `KNOWN_UNAVAILABLE`: игроку показывается именно текст, и
+     * состояние без текста выглядело бы как поломка.
+     */
+    @Transactional
+    public TransitionState setEdgeState(
+            UUID actorUserId, UUID gameId, UUID transitionId, UUID characterId,
+            EdgeState state, String reason) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        requireTransition(gameId, transitionId);
+        Character character = characters.findById(characterId)
+                .orElseThrow(() -> ApiException.notFound("character_not_found", "Персонаж не найден"));
+        if (!character.gameId().equals(gameId)) {
+            throw ApiException.badRequest("character_other_game", "Персонаж принадлежит другой игре");
+        }
+        if (state == null) {
+            throw ApiException.badRequest("edge_state_required", "Укажите состояние перехода");
+        }
+        if (state == EdgeState.KNOWN_UNAVAILABLE) {
+            requireText(reason, "edge_reason_required", "Укажите причину недоступности перехода", 500);
+        }
+
+        TransitionState stored = edgeStates.upsert(
+                transitionId, characterId, state, reason == null ? null : normalize(reason));
+
+        Map<String, Object> payload = payload("transitionId", transitionId.toString());
+        payload.put("characterId", characterId.toString());
+        payload.put("state", state.name());
+        if (stored.reason() != null) {
+            payload.put("reason", stored.reason());
+        }
+        event(gameId, GameEventType.TRANSITION_STATE_CHANGED, actorUserId, payload);
+        return stored;
+    }
+
+    /**
+     * Заведение персонажа. На `E04` сущность нужна минимально — без неё нельзя привязать
+     * знание ребра (`REQUIREMENTS §8`); портрет, истории, занятость и скрытность делает `E06`.
+     */
+    @Transactional
+    public Character registerCharacter(UUID actorUserId, UUID gameId, String name) {
+        requireMaster(actorUserId, gameId);
+        requireText(name, "character_name_required", "Укажите имя персонажа", 200);
+
+        Character character = new Character(Uuids.v7(), gameId, name.strip(), null);
+        characters.insert(character);
+        return character;
+    }
+
+    /**
+     * Общая форма отказа на удаление. Удаления нет ни до, ни после `READY` (`D-010`, `D-103`);
+     * после старта причина отказа — правила игры, до старта — подсказка про архивацию.
+     */
+    private static ApiException deletionRefused(Game game, String subjectRu, String code) {
+        boolean ready = game.state().readiness() == Readiness.READY;
+        String message = ready
+                ? "Удаление " + subjectRu + " запрещено после старта игры: используйте архивацию"
+                : "Удаление " + subjectRu + " не предусмотрено: используйте архивацию";
+        return ApiException.conflict(code, message);
+    }
+
+    private Chat requireLocation(UUID gameId, UUID chatId) {
+        Chat chat = chats.findById(chatId)
+                .orElseThrow(() -> ApiException.notFound("chat_not_found", "Локация не найдена"));
+        if (!chat.gameId().equals(gameId)) {
+            throw ApiException.notFound("chat_not_found", "Локация не найдена");
+        }
+        if (chat.kind() != ChatKind.LOCATION) {
+            throw ApiException.badRequest("chat_not_location", "Этот чат не является локацией");
+        }
+        return chat;
+    }
+
+    private Transition requireTransition(UUID gameId, UUID transitionId) {
+        Transition transition = transitions.findById(transitionId)
+                .orElseThrow(() -> ApiException.notFound("transition_not_found", "Переход не найден"));
+        if (!transition.gameId().equals(gameId)) {
+            throw ApiException.notFound("transition_not_found", "Переход не найден");
+        }
+        return transition;
     }
 
     // --- Общие проверки ----------------------------------------------------------------

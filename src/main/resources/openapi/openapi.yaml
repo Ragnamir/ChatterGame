@@ -205,6 +205,438 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/locations:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание локации мастером
+      description: |
+        Локация — узел графа (`REQUIREMENTS §7.1`). Удаление не предусмотрено ни до, ни после
+        `READY` (`D-010`, `D-103`): только архивация с причиной.
+      operationId: createLocation
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationRequest' }
+      responses:
+        '201':
+          description: Локация создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Location' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: Локации игры глазами запросившего
+      description: |
+        Архивная локация до `READY` игроку не отдаётся вовсе, после `READY` приходит с
+        признаком и причиной (`D-009`).
+      operationId: listLocations
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Локации
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GraphNode' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/locations/{chatId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    patch:
+      summary: Правка названия и описания локации
+      description: После `FINISHED` правка мира запрещена (`D-094`).
+      operationId: updateLocation
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationRequest' }
+      responses:
+        '200':
+          description: Локация после правки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Location' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Удаление локации запрещено всегда
+      description: |
+        Физического удаления нет ни до, ни после `READY` (`D-010`, `D-103`). Ответ всегда
+        `409` с машинным кодом и причиной; до `READY` текст причины подсказывает архивацию.
+      operationId: deleteLocation
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Удаление не предусмотрено, используйте архивацию
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /games/{id}/locations/{chatId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Архивирование локации с причиной
+      description: Идемпотентно: повторный вызов не пишет второе событие.
+      operationId: archiveLocation
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveRequest' }
+      responses:
+        '200':
+          description: Локация в архиве
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Location' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/locations/{chatId}/image:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    put:
+      summary: Установка или снятие картинки локации
+      description: |
+        `assetId: null` снимает картинку: удаляется ссылка, а не ассет (`D-077`, `D-106`).
+        Ассет обязан принадлежать этой же игре; прежняя картинка освобождается, если на неё
+        больше никто не ссылается.
+      operationId: setLocationImage
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LocationImageRequest' }
+      responses:
+        '200':
+          description: Локация после правки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Location' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/graph:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Граф локаций глазами запросившего
+      description: |
+        Без `asCharacter` полный граф, включая архивные рёбра, видит только мастер. С
+        `asCharacter` рёбра отбираются по знанию указанного персонажа; игрок обязан смотреть
+        своим персонажем (`REQUIREMENTS §8`, `D-103`).
+      operationId: getGameGraph
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Узлы и рёбра
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameGraph' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/graph/transitions:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание ориентированного перехода
+      description: |
+        Направление явное; симметричность задаётся двумя рёбрами (`REQUIREMENTS §8`).
+        Переход архивируется с причиной, закрытие делается состоянием у персонажа.
+      operationId: createTransition
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTransitionRequest' }
+      responses:
+        '201':
+          description: Переход создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transition' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: Рёбра графа глазами запросившего
+      operationId: listGraphTransitions
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Рёбра
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GraphEdge' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/graph/transitions/{transitionId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/TransitionId'
+    patch:
+      summary: Переименование перехода
+      operationId: renameTransition
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenameTransitionRequest' }
+      responses:
+        '200':
+          description: Переход после правки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transition' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Удаление перехода запрещено всегда
+      operationId: deleteTransition
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Удаление не предусмотрено, используйте архивацию
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /games/{id}/graph/transitions/{transitionId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/TransitionId'
+    post:
+      summary: Архивирование перехода с причиной
+      operationId: archiveTransition
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveRequest' }
+      responses:
+        '200':
+          description: Переход в архиве
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transition' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/graph/transitions/{transitionId}/state:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/TransitionId'
+    put:
+      summary: Состояние ребра для персонажа
+      description: |
+        Мастер ведёт знание ребра по каждому персонажу осознанно (`D-103`). Для
+        `KNOWN_UNAVAILABLE` причина обязательна: именно её видит игрок. Идемпотентно.
+      operationId: setTransitionState
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EdgeStateRequest' }
+      responses:
+        '200':
+          description: Состояние сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EdgeState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Заведение персонажа мастером
+      description: |
+        На `E04` заводится минимальный персонаж — без него нельзя привязать знание ребра
+        (`D-103`). Портрет, истории, занятость и скрытность — `E06`.
+      operationId: registerCharacter
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CharacterRequest' }
+      responses:
+        '201':
+          description: Персонаж создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/assets:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Загрузка медиа-ассета мастером
+      description: |
+        Формат определяется по содержимому, не по расширению (`D-074`): whitelist
+        `jpeg, png, webp, gif`, отдельные отказы на SVG и HTML. Сторона проверяется по
+        заголовку до декодирования (`D-076`), метаданные вырезаются при записи (`D-077`).
+        Загрузка ассета ещё не мутирует мир: событие в журнале появляется при привязке.
+      operationId: uploadAsset
+      tags: [media]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Ассет принят
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /games/{id}/assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      summary: Отдача медиа-ассета
+      description: |
+        Отдаётся приложением, а не веб-сервером: проверка участия стоит на каждом запросе
+        (`D-075`). Посторонний получает `404`, а не `403`, — иначе код ответа выдал бы
+        существование чужой игры. Отдача идёт с `nosniff`, точным `Content-Type` и долгим
+        `Cache-Control` с идентификатором в URL (`D-077`).
+      operationId: readAsset
+      tags: [media]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Содержимое ассета
+          headers:
+            Cache-Control:
+              description: Долгий кэш; идентификатор ассета неперечислим и неизменяем
+              schema: { type: string }
+            X-Content-Type-Options:
+              description: Всегда `nosniff`
+              schema: { type: string }
+          content:
+            image/jpeg: {}
+            image/png: {}
+            image/webp: {}
+            image/gif: {}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: Ассета нет, он из другой игры или нет участия
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /auth/register:
     post:
       summary: Открытая регистрация по логину и паролю
@@ -453,6 +885,21 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ChatId:
+      name: chatId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TransitionId:
+      name: transitionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   headers:
     SessionCookie:
       description: HttpOnly, SameSite=Lax, срок 30 дней
@@ -660,3 +1107,138 @@ components:
         onBehalfOfMaster: { type: boolean }
         payload: { type: object }
         createdAt: { type: string, format: date-time }
+    LocationRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: [string, 'null'], maxLength: 4000 }
+    Location:
+      type: object
+      description: |
+        Локация (`REQUIREMENTS §7.1`). `archived` и `archivedReason` — отдельные поля:
+        клиент показывает «выведено из игры» с причиной (`D-009`).
+      required: [id, gameId, kind, title, archived, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        kind: { type: string, enum: [LOCATION] }
+        title: { type: string }
+        description: { type: [string, 'null'] }
+        imageAssetId: { type: [string, 'null'], format: uuid, description: Картинка локации, одна на сущность (`D-098`) }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        archivedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    LocationImageRequest:
+      type: object
+      description: Пустая ссылка снимает картинку; удаления ассета здесь нет (`D-077`).
+      properties:
+        assetId: { type: [string, 'null'], format: uuid }
+    Asset:
+      type: object
+      description: |
+        Метаданные ассета (`REQUIREMENTS §19`). Ключа хранилища в контракте нет: клиент
+        ходит по `/assets/{id}`, и переезд на объектное хранилище контракт не меняет.
+      required: [id, gameId, mime, byteSize, width, height, sha256, createdAt]
+      properties:
+        id: { type: string, format: uuid, description: Неперечислимый идентификатор (`D-075`) }
+        gameId: { type: string, format: uuid }
+        mime: { type: string, enum: [image/jpeg, image/png, image/webp, image/gif] }
+        byteSize: { type: integer, minimum: 1 }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        sha256: { type: string, description: Хеш содержимого после вырезания метаданных (`D-077`) }
+        originalName: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    ArchiveRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
+    CreateTransitionRequest:
+      type: object
+      required: [fromChatId, toChatId]
+      properties:
+        fromChatId: { type: string, format: uuid }
+        toChatId: { type: string, format: uuid }
+        title: { type: [string, 'null'], maxLength: 200 }
+    RenameTransitionRequest:
+      type: object
+      properties:
+        title: { type: [string, 'null'], maxLength: 200 }
+    Transition:
+      type: object
+      required: [id, gameId, fromChatId, toChatId, archived, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        fromChatId: { type: string, format: uuid }
+        toChatId: { type: string, format: uuid }
+        title: { type: [string, 'null'] }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        archivedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+    EdgeStateRequest:
+      type: object
+      required: [characterId, state]
+      properties:
+        characterId: { type: string, format: uuid }
+        state: { type: string, enum: [UNKNOWN, KNOWN_UNAVAILABLE, AVAILABLE] }
+        reason: { type: [string, 'null'], maxLength: 500 }
+    EdgeState:
+      type: object
+      required: [transitionId, characterId, state]
+      properties:
+        transitionId: { type: string, format: uuid }
+        characterId: { type: string, format: uuid }
+        state: { type: string, enum: [UNKNOWN, KNOWN_UNAVAILABLE, AVAILABLE] }
+        reason: { type: string }
+    CharacterRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 200 }
+    Character:
+      type: object
+      required: [id, gameId, name]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        name: { type: string }
+    GraphNode:
+      type: object
+      required: [id, title, archived]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: [string, 'null'] }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+    GraphEdge:
+      type: object
+      description: |
+        Ребро глазами смотрящего. `state` — знание конкретного персонажа
+        (`REQUIREMENTS §8`); у мастера без `asCharacter` он `null`. Рёбра в состоянии
+        `UNKNOWN` в ответ не попадают.
+      required: [id, fromChatId, toChatId]
+      properties:
+        id: { type: string, format: uuid }
+        fromChatId: { type: string, format: uuid }
+        toChatId: { type: string, format: uuid }
+        title: { type: [string, 'null'] }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        state: { type: [string, 'null'], enum: [UNKNOWN, KNOWN_UNAVAILABLE, AVAILABLE, 'null'] }
+        reason: { type: [string, 'null'] }
+    GameGraph:
+      type: object
+      required: [nodes, edges]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/GraphNode' }
+        edges:
+          type: array
+          items: { $ref: '#/components/schemas/GraphEdge' }

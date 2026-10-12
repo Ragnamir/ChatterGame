@@ -160,6 +160,30 @@ case "$stage" in
       echo "  ok: E03 — контроллеры не пишут в доменные таблицы"
     fi
     ;;
+  E05)
+    if grep -rqE '@RestController' src/main/java/com/chattergame/web/media; then
+      echo "  ok: E05 — веб-слой медиа на месте"
+    else
+      fail=1
+      echo "FAIL: E05 требует эндпоинты загрузки и отдачи ассетов"
+    fi
+    if find src/test/java -name 'E05*Test.java' | grep -q .; then
+      echo "  ok: E05 — тесты этапа присутствуют"
+    else
+      fail=1
+      echo "FAIL: нет тестов этапа E05 (E05*Test.java)"
+    fi
+    # REQUIREMENTS §19: медиа отдаётся приложением, потому что только оно проверяет участие
+    # на каждый запрос (D-075). Каталог статики отдал бы файл мимо этой проверки.
+    static_media=$(find src/main/resources -maxdepth 2 -path '*static*' 2>/dev/null || true)
+    if [ -n "$static_media" ]; then
+      fail=1
+      echo "FAIL: E05 — медиа не должно отдаваться веб-сервером статикой:"
+      echo "$static_media"
+    else
+      echo "  ok: E05 — медиа отдаётся приложением, статики нет"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

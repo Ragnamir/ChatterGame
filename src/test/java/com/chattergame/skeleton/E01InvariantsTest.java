@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,12 +29,6 @@ class E01InvariantsTest {
     private static final Path CANARY =
             Paths.get("src/test/resources/canary/CanaryPhysicalDeletion.java");
 
-    private static final Set<String> DOMAIN_TABLES = Set.of(
-            "game", "game_event", "membership", "chat", "transition", "transition_state",
-            "character", "presence", "restriction", "storage", "item", "item_placement",
-            "message", "inbox_entry", "read_cursor", "asset", "note", "note_keyword",
-            "saved_message", "turn", "turn_budget", "request", "request_operation");
-
     private static List<String> scan(SourceCheck check) throws IOException {
         List<String> findings = new ArrayList<>();
         for (Path file : SourceScanner.javaFiles(MAIN_SOURCES)) {
@@ -48,10 +41,12 @@ class E01InvariantsTest {
 
     @Test
     void noPhysicalDeletionOfDomainRows() throws IOException {
-        List<String> findings = scan(file -> SourceRules.physicalDeletions(file, DOMAIN_TABLES));
+        List<String> findings = scan(
+                file -> SourceRules.physicalDeletions(file, SourceRules.DOMAIN_TABLES));
 
         assertThat(findings)
-                .as("физическое удаление доменных строк запрещено (D-010)")
+                .as("физическое удаление доменных строк запрещено (D-010); "
+                        + "единственное исключение — орфан-сборка asset (D-104)")
                 .isEmpty();
     }
 
@@ -93,7 +88,7 @@ class E01InvariantsTest {
 
     @Test
     void worldMutationsGoThroughJournal() throws IOException {
-        List<String> findings = scan(file -> SourceRules.worldMutationsWithoutJournal(file, DOMAIN_TABLES));
+        List<String> findings = scan(file -> SourceRules.worldMutationsWithoutJournal(file, SourceRules.DOMAIN_TABLES));
 
         assertThat(findings)
                 .as("любая мутация мира оставляет событие в game_event (AGENTS §2, D-033)")
@@ -143,7 +138,7 @@ class E01InvariantsTest {
                 """);
 
         List<SourceScanner.Finding> findings =
-                SourceRules.worldMutationsWithoutJournal(file, DOMAIN_TABLES);
+                SourceRules.worldMutationsWithoutJournal(file, SourceRules.DOMAIN_TABLES);
 
         assertThat(findings).hasSize(1);
         assertThat(findings.getFirst().text()).contains("UPDATE character");
@@ -161,12 +156,12 @@ class E01InvariantsTest {
                 }
                 """);
 
-        assertThat(SourceRules.worldMutationsWithoutJournal(file, DOMAIN_TABLES)).isEmpty();
+        assertThat(SourceRules.worldMutationsWithoutJournal(file, SourceRules.DOMAIN_TABLES)).isEmpty();
     }
 
     @Test
     void canaryPhysicalDeletionIsDetected() throws IOException {
-        assertThat(SourceRules.physicalDeletions(CANARY, DOMAIN_TABLES))
+        assertThat(SourceRules.physicalDeletions(CANARY, SourceRules.DOMAIN_TABLES))
                 .as("детектор удаления обязан срабатывать на канарейке, иначе инвариант мёртв")
                 .isNotEmpty();
     }
@@ -222,7 +217,7 @@ class E01InvariantsTest {
                 }
                 """);
 
-        assertThat(SourceRules.physicalDeletions(file, DOMAIN_TABLES)).hasSize(1);
+        assertThat(SourceRules.physicalDeletions(file, SourceRules.DOMAIN_TABLES)).hasSize(1);
         assertThat(SourceRules.messageReadsWithoutInbox(file)).isEmpty();
     }
 

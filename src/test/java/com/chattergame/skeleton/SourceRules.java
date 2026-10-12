@@ -2,6 +2,7 @@ package com.chattergame.skeleton;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -17,6 +18,25 @@ import java.util.regex.Pattern;
  * их смысл — ловить регрессию архитектурных решений на каждом гейте.
  */
 final class SourceRules {
+
+    /**
+     * Доменные таблицы: те, чьи строки нельзя удалять физически (`D-010`) и чьи мутации
+     * обязаны оставлять событие (`D-033`). Список один на все правила намеренно: два
+     * расходящихся перечня дали бы дыру, которую никто не заметит.
+     */
+    static final Set<String> DOMAIN_TABLES = Set.of(
+            "game", "game_event", "membership", "chat", "transition", "transition_state",
+            "character", "presence", "restriction", "storage", "item", "item_placement",
+            "message", "inbox_entry", "read_cursor", "asset", "note", "note_keyword",
+            "saved_message", "turn", "turn_budget", "request", "request_operation");
+
+    /**
+     * Узкое исключение из `D-010`, выданное решением `D-104`: орфан-сборка освобождает диск
+     * удалением строк `asset` (`D-077`), и `DELETE FROM asset` живёт ровно в этом файле.
+     * Исключение названо рядом с правилом, чтобы запрет и его граница читались вместе.
+     */
+    static final Path ASSET_PURGE =
+            Paths.get("src/main/java/com/chattergame/media/AssetRepository.java");
 
     private static final List<String> EXTERNAL_CALL_TOKENS = List.of(
             "RestClient",
@@ -36,7 +56,7 @@ final class SourceRules {
         return String.join("|", tables.stream().sorted().toList());
     }
 
-    /** Физическое удаление доменных строк: запрещено всегда (`D-010`). */
+    /** Физическое удаление доменных строк: запрещено всегда (`D-010`), кроме `asset` (`D-104`). */
     static List<SourceScanner.Finding> physicalDeletions(Path file, Set<String> tables)
             throws IOException {
         SourceScanner scanner = SourceScanner.of(file);
@@ -47,10 +67,24 @@ final class SourceRules {
         for (SourceScanner.Literal literal : scanner.literals()) {
             Matcher matcher = pattern.matcher(literal.text());
             while (matcher.find()) {
-                findings.add(new SourceScanner.Finding(file, literal.line(), matcher.group()));
+                SourceScanner.Finding finding =
+                        new SourceScanner.Finding(file, literal.line(), matcher.group());
+                if (!isAllowedAssetPurge(file, finding)) {
+                    findings.add(finding);
+                }
             }
         }
         return findings;
+    }
+
+    /**
+     * Граница исключения `D-104`: `DELETE FROM asset` допустим только в
+     * {@link #ASSET_PURGE} и только по таблице `asset`. Оба условия обязательны — одного
+     * пути мало, иначе в том же классе можно было бы удалить любую доменную строку.
+     */
+    static boolean isAllowedAssetPurge(Path file, SourceScanner.Finding finding) {
+        return file.equals(ASSET_PURGE)
+                && finding.text().toLowerCase(Locale.ROOT).contains("delete from asset");
     }
 
     /**

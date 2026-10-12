@@ -1,0 +1,43 @@
+databaseChangeLog:
+  # E04: локационные чаты и переходы. Применённый `001-baseline.yaml` не редактируется
+  # никогда — причина архивации и момент добавляются отдельной записью (`AGENTS §1`).
+  #
+  # `chat_state` из `PLAN` E04 отдельной таблицей не заводится: имя в `PLAN` — ориентир,
+  # источник истины — `contract/expected-tables.txt`. Достаточно двух колонок в `chat`
+  # и двух в `transition` (`D-103`).
+
+  - changeSet:
+      id: 002-01-chat-archive
+      author: e04
+      changes:
+        - addColumn:
+            tableName: chat
+            columns:
+              # Причина обязательна по решению, но колонка не `NOT NULL`: строки, созданные
+              # до архивации, живут с `NULL`, а требование держит сервис ради текста ошибки.
+              - column: { name: archived_reason, type: varchar(500) }
+              - column: { name: archived_at, type: timestamptz }
+
+  - changeSet:
+      id: 002-02-transition-archive
+      author: e04
+      changes:
+        - addColumn:
+            tableName: transition
+            columns:
+              - column: { name: archived_reason, type: varchar(500) }
+              - column: { name: archived_at, type: timestamptz }
+
+  - changeSet:
+      id: 002-03-transition-state-character
+      author: e04
+      changes:
+        # FK не был проставлен в baseline, потому что `transition_state` создаётся в блоке
+        # до `character`. На E04 знание ребра всё равно привязано к персонажу
+        # (`REQUIREMENTS §8`), поэтому ссылка появляется здесь (`D-103`).
+        - addForeignKeyConstraint:
+            baseTableName: transition_state
+            baseColumnNames: character_id
+            referencedTableName: character
+            referencedColumnNames: id
+            constraintName: fk_transition_state_character
