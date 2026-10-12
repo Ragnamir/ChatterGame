@@ -78,6 +78,19 @@ docker compose up -d db      # локальный Postgres
 ./gradlew bootRun            # профиль dev по умолчанию
 ```
 
+Тестовая база. `PostgresTestSupport` ищет источник по порядку: `CHATTERGAME_DB_*`,
+локальный Postgres из compose, затем Testcontainers. В окружении агента Docker-демон не
+поднимается (`iptables ... Permission denied`), поэтому тесты и гейт идут на локальном
+Postgres 16 (`localhost:5432`, база `chattergame`, гейт — `chattergame_gate`), а не на
+Testcontainers. Тесты молча скипаются, если базы нет вовсе (`Assumptions`), поэтому
+«зелёный» без живой базы ничего не значит: проверяйте, что тестов не пропущено (`gate`
+делает это отдельной строкой).
+
+```bash
+./gradlew -q resetDb -Pdb.url=jdbc:postgresql://localhost:5432/chattergame \
+  -Pdb.user=chattergame -Pdb.password=chattergame
+```
+
 ## Конвенции кода
 
 - Комментарии только там, где код не выражает инвариант: порядок блокировок, обход,
