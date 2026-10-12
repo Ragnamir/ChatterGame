@@ -99,9 +99,21 @@ else
 fi
 
 step "invariants и stage_checks"
-# Секция специфична для этапа: на E01 контроллеров быть не должно, на E02 они и есть
-# предмет этапа. Глобальные инварианты живут в тестах (`E01InvariantsTest`) и от номера
-# этапа не зависят.
+# Тесты этапа со своим префиксом (`AGENTS`, протокол п. 3) — проверка общая для всех `E`,
+# потому что она одна и та же и её отсутствие даёт ложный зелёный: `stage_checks` молчит
+# для этапа без своего случая, тесты прошлых этапов проходят, и гейт подтверждает этап,
+# которого нет. Проверено: до этой правки `./scripts/gate.sh E06` печатал `GATE E06 PASSED`
+# при полном отсутствии кода и тестов E06. Для дорожек `F` и `O` правило не применяется:
+# их тесты не обязаны быть JUnit-классами в `src/test/java`.
+if [[ "$stage" =~ ^E[0-9][0-9]$ ]]; then
+  if find src/test/java -name "${stage}*Test.java" | grep -q .; then
+    echo "  ok: $stage — тесты этапа присутствуют"
+  else
+    fail=1
+    echo "FAIL: нет тестов этапа $stage (${stage}*Test.java): этап не написан"
+  fi
+fi
+
 case "$stage" in
   E01)
     violations=$(grep -rlE '@(RestController|Controller|GetMapping|PostMapping|MessageMapping)' \
@@ -121,12 +133,6 @@ case "$stage" in
       fail=1
       echo "FAIL: E02 требует контроллеры регистрации, входа и /me"
     fi
-    if find src/test/java -name 'E02*Test.java' | grep -q .; then
-      echo "  ok: E02 — тесты этапа присутствуют"
-    else
-      fail=1
-      echo "FAIL: нет тестов этапа E02 (E02*Test.java)"
-    fi
     ;;
   E03)
     if grep -rqE '@RestController' src/main/java/com/chattergame/web/game; then
@@ -134,12 +140,6 @@ case "$stage" in
     else
       fail=1
       echo "FAIL: E03 требует контроллер создания и чтения игры"
-    fi
-    if find src/test/java -name 'E03*Test.java' | grep -q .; then
-      echo "  ok: E03 — тесты этапа присутствуют"
-    else
-      fail=1
-      echo "FAIL: нет тестов этапа E03 (E03*Test.java)"
     fi
     # PLAN E03: «Запрещено: WebSocket, сообщения, персонажи». Проверка адресная, чтобы
     # преждевременный реалтайм не проехал вместе с этапом.
@@ -166,12 +166,6 @@ case "$stage" in
     else
       fail=1
       echo "FAIL: E05 требует эндпоинты загрузки и отдачи ассетов"
-    fi
-    if find src/test/java -name 'E05*Test.java' | grep -q .; then
-      echo "  ok: E05 — тесты этапа присутствуют"
-    else
-      fail=1
-      echo "FAIL: нет тестов этапа E05 (E05*Test.java)"
     fi
     # REQUIREMENTS §19: медиа отдаётся приложением, потому что только оно проверяет участие
     # на каждый запрос (D-075). Каталог статики отдал бы файл мимо этой проверки.
