@@ -1,0 +1,29 @@
+databaseChangeLog:
+  # E08: сообщения, права, материализованная видимость. Применённые `001-baseline.yaml`,
+  # `002-e04.yaml`, `003-e06.yaml` и `004-e07.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Новых таблиц нет и не нужно: `message`, `inbox_entry` и `read_cursor` объявлены в
+  # baseline (`001-20…001-22`) вместе с индексом resume `ix_inbox_entry_subject_chat_seq`
+  # и уникальностью `(subject_kind, subject_id, chat_id, event_seq)` (`D-083`, `D-086`),
+  # а `message.body` уже `varchar(4000)` под лимит `D-098`. Это тот же случай, что `E06`
+  # и `E07` (`D-103`): `PLAN` перечисляет таблицы по имени, а источник истины — контракт
+  # `contract/expected-tables.txt`.
+  #
+  # Единственное, чего baseline не покрывает, — выборка активных запретов: их проверяют
+  # на каждое событие (`D-065`), а снятые строки копятся и составляют почти всю таблицу.
+
+  - changeSet:
+      id: 005-01-restriction-active
+      author: e08
+      changes:
+        # Снятие запрета — это `revoked_at`, а не удаление строки (`D-010`, `D-064`),
+        # поэтому со временем таблица состоит в основном из закрытых записей, а читаются
+        # всегда открытые. Частичный индекс отсекает их на входе.
+        #
+        # Предикат задан сырым `sql`: `createIndex` в Liquibase OSS предикат `where` молча
+        # игнорирует — так `ux_presence_active_character` был создан полным и уронил
+        # второе перемещение персонажа (`003-e06.yaml`). Проверять надо результат
+        # применения, а не замысел changeset-а.
+        - sql:
+            sql: CREATE INDEX ix_restriction_active ON restriction (game_id, subject_kind, subject_id) WHERE revoked_at IS NULL
+            rollback: DROP INDEX ix_restriction_active

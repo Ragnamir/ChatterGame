@@ -28,12 +28,32 @@ public class GameQueryService {
     private final GameRepository games;
     private final MembershipRepository memberships;
     private final GameEventRepository events;
+    private final com.chattergame.restriction.RestrictionRepository restrictions;
 
     public GameQueryService(
-            GameRepository games, MembershipRepository memberships, GameEventRepository events) {
+            GameRepository games,
+            MembershipRepository memberships,
+            GameEventRepository events,
+            com.chattergame.restriction.RestrictionRepository restrictions) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
+        this.restrictions = restrictions;
+    }
+
+    /**
+     * Запреты игры. Видит мастер целиком, участник — только свои: запрет адресован
+     * конкретному персонажу или участию (`D-064`), и список всех раскрыл бы игроку, кого
+     * мастер ограничил и почему.
+     */
+    @Transactional(readOnly = true)
+    public List<com.chattergame.restriction.Restriction> restrictions(UUID userId, UUID gameId) {
+        requireReadable(userId, gameId);
+        Membership membership = memberships.find(gameId, userId).orElseThrow();
+        if (membership.role() == MembershipRole.MASTER) {
+            return restrictions.findByGame(gameId);
+        }
+        return restrictions.findForMembership(gameId, membership.id());
     }
 
     @Transactional(readOnly = true)

@@ -1016,6 +1016,259 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/chats/{chatId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Запись сообщения в чат
+      description: |
+        Пять типов (`D-031`) и матрица прав `assertCanPost` (`D-065`). Права читаются из БД
+        на каждое событие, поэтому снятие персонажа, мут и завершение игры действуют сразу,
+        без переподключения сокета. Получатели материализуются при записи (`D-030`).
+        Отзыва и правки сообщений нет как API (`D-008`).
+      operationId: postMessage
+      tags: [message]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostMessageRequest' }
+      responses:
+        '201':
+          description: Сообщение записано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: Лента чата
+      description: |
+        Единственный read-путь: строки берутся из `inbox_entry`, тело подклеивается по
+        `message_id` (`D-030`), системные строки собираются из журнала (`D-031`).
+        `afterSeq` — подтверждённый номер доставки, поэтому та же ручка служит resume (`D-083`).
+        Чьими глазами смотреть, задаёт `asCharacter`; наблюдатель его не передаёт (`D-086`).
+      operationId: readFeed
+      tags: [message]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: afterSeq
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Страница ленты и метки курсора
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Feed' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/chats/{chatId}/enter:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Вход в локацию
+      description: |
+        Курсор ставится на текущий `max(seq)`, и отдельно возвращается последняя реплика:
+        видно только её (`D-032`), а не вся переписка с начала игры.
+      operationId: enterChat
+      tags: [message]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Курсор и последнее адресованное сообщение
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/chats/{chatId}/read:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Отметка «прочитано до»
+      description: |
+        Пустое тело означает «до конца чата». Курсор двигается только вперёд и не может
+        обогнать ленту, иначе клиент потерял бы строки при следующем чтении.
+      operationId: markChatRead
+      tags: [message]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReadRequest' }
+      responses:
+        '200':
+          description: Курсор обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadCursor' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/unread:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Счётчики непрочитанного
+      description: |
+        Считается по `inbox_entry`, поэтому бейдж сам по себе не учитывает скрытых
+        персонажей и чужие личные каналы (`D-036`).
+      operationId: readUnread
+      tags: [message]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Итог и разбивка по чатам
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unread' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/cursors:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Курсоры прочтения по чатам
+      description: |
+        Клиент держит эти метки между запросами и продолжает с них при resume (`D-083`).
+      operationId: readCursors
+      tags: [message]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asCharacter
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Пары «идентификатор чата → последний прочитанный номер»
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: integer, format: int64 }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/restrictions:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Навешивание ограничения
+      description: |
+        Ограничение отражает игровую ситуацию, поэтому причина обязательна, а срок — нет
+        (`D-064`). Субъект диктуется видом: `NO_JOKE` — участие, остальные — персонаж
+        (`D-099`). Бан — статус участия, а не ограничение (`REQUIREMENTS §13`).
+      operationId: setRestriction
+      tags: [restriction]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RestrictionRequest' }
+      responses:
+        '201':
+          description: Ограничение навешено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Restriction' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: Список ограничений
+      description: |
+        Мастер видит все ограничения игры, участник — только те, что касаются его персонажей
+        и его участия: иначе список раскрыл бы, кого мастер ограничил и почему.
+      operationId: readRestrictions
+      tags: [restriction]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Ограничения
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Restriction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/restrictions/{restrictionId}/revoke:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/RestrictionId'
+    post:
+      summary: Снятие ограничения
+      description: |
+        Снятие — штатная операция мастера: строка остаётся частью истории, меняется только
+        `revokedAt` (`D-010`, `D-064`). Удаления ограничения нет как API.
+      operationId: revokeRestriction
+      tags: [restriction]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Ограничение снято
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Restriction' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/assets:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -1364,6 +1617,11 @@ components:
       schema: { type: string, format: uuid }
     AssetId:
       name: assetId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RestrictionId:
+      name: restrictionId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -1850,3 +2108,111 @@ components:
         edges:
           type: array
           items: { $ref: '#/components/schemas/GraphEdge' }
+    MessageKind:
+      type: string
+      enum: [SPEECH, ACTION, JOKE, MASTER, SYSTEM]
+    PostMessageRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/MessageKind' }
+        characterId:
+          type: [string, 'null']
+          format: uuid
+          description: Обязателен для `SPEECH` и `ACTION`; у шутки и события мира автора может не быть
+        body: { type: [string, 'null'], maxLength: 4000, description: 'Лимит длины (`D-098`)' }
+        onBehalfOfMaster:
+          type: boolean
+          default: false
+          description: 'Сообщение мастера от лица персонажа; расходует бюджет персонажа (`D-005`)'
+    Message:
+      type: object
+      description: |
+        Строка ленты: либо сообщение, либо системная проекция журнала (`D-031`). У системной
+        строки пусты `messageId` и `body`, но заполнен `systemCode`: текст переводится клиентом
+        по ключу интернализации, а не приходит с сервера (`D-081`).
+      required: [seq, kind, chatId]
+      properties:
+        seq: { type: integer, format: int64, description: Номер в журнале игры (`D-033`) }
+        kind: { $ref: '#/components/schemas/MessageKind' }
+        messageId: { type: [string, 'null'], format: uuid }
+        chatId: { type: string, format: uuid }
+        characterId: { type: [string, 'null'], format: uuid }
+        authorMembershipId: { type: [string, 'null'], format: uuid }
+        authorUserId: { type: [string, 'null'], format: uuid }
+        onBehalfOfMaster: { type: boolean }
+        hiddenAuthor: { type: boolean, description: 'Скрытность на момент записи (`D-007`)' }
+        body: { type: [string, 'null'] }
+        systemCode: { type: [string, 'null'], description: 'Ключ интернализации системного события' }
+        payload: { type: [object, 'null'] }
+        createdAt: { type: string, format: date-time }
+    Feed:
+      type: object
+      required: [items, lastSeq, readSeq, chatKind]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        lastSeq: { type: integer, format: int64, description: Метка продолжения для resume (`D-083`) }
+        readSeq: { type: integer, format: int64 }
+        chatKind: { type: string, enum: [LOCATION, RADIO, MASTER_DM, WHISPER, FINAL] }
+    ChatEntry:
+      type: object
+      required: [chatId, chatKind, cursor]
+      properties:
+        chatId: { type: string, format: uuid }
+        chatKind: { type: string, enum: [LOCATION, RADIO, MASTER_DM, WHISPER, FINAL] }
+        cursor: { type: integer, format: int64, description: Курсор на текущий максимум (`D-032`) }
+        lastMessage: { anyOf: [{ $ref: '#/components/schemas/Message' }, { type: 'null' }] }
+    ReadRequest:
+      type: object
+      properties:
+        seq: { type: [integer, 'null'], format: int64, description: 'Пусто — до конца чата' }
+    ReadCursor:
+      type: object
+      required: [chatId, subjectKind, subjectId, lastSeq]
+      properties:
+        chatId: { type: string, format: uuid }
+        subjectKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        subjectId: { type: string, format: uuid }
+        lastSeq: { type: integer, format: int64 }
+    Unread:
+      type: object
+      required: [total, chats]
+      properties:
+        total: { type: integer, format: int64 }
+        chats:
+          type: array
+          items:
+            type: object
+            required: [chatId, count]
+            properties:
+              chatId: { type: string, format: uuid }
+              count: { type: integer, format: int64 }
+    RestrictionKind:
+      type: string
+      description: '`NO_JOKE` адресуется участию, остальные — персонажу (`D-099`)'
+      enum: [NO_SPEECH, NO_ACTION, NO_MOVE, NO_JOKE]
+    RestrictionRequest:
+      type: object
+      required: [subjectKind, subjectId, kind, reason]
+      properties:
+        subjectKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        subjectId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/RestrictionKind' }
+        reason: { type: string, maxLength: 500, description: 'Обязателен: ограничение — ситуация, а не наказание (`D-064`)' }
+        expiresAt: { type: [string, 'null'], format: date-time, description: 'Срок поддерживается, но не обязателен' }
+    Restriction:
+      type: object
+      required: [id, gameId, subjectKind, subjectId, kind, reason, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        subjectKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        subjectId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/RestrictionKind' }
+        reason: { type: string }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time, description: 'Снятие — не удаление (`D-010`)' }

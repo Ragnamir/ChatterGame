@@ -27,6 +27,13 @@ import com.chattergame.item.StorageKind;
 import com.chattergame.item.StorageRepository;
 import com.chattergame.media.Asset;
 import com.chattergame.media.AssetRepository;
+import com.chattergame.message.InboxMaterializer;
+import com.chattergame.message.InboxSubject;
+import com.chattergame.message.SubjectKind;
+import com.chattergame.message.SystemProjection;
+import com.chattergame.restriction.Restriction;
+import com.chattergame.restriction.RestrictionKind;
+import com.chattergame.restriction.RestrictionRepository;
 import com.chattergame.media.AssetService;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
@@ -70,6 +77,8 @@ public class GameMutationService {
     private final ItemRepository items;
     private final AssetRepository assets;
     private final AssetService assetService;
+    private final InboxMaterializer inbox;
+    private final RestrictionRepository restrictions;
 
     public GameMutationService(
             GameRepository games,
@@ -85,7 +94,9 @@ public class GameMutationService {
             StorageRepository storages,
             ItemRepository items,
             AssetRepository assets,
-            AssetService assetService) {
+            AssetService assetService,
+            InboxMaterializer inbox,
+            RestrictionRepository restrictions) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
@@ -100,6 +111,8 @@ public class GameMutationService {
         this.items = items;
         this.assets = assets;
         this.assetService = assetService;
+        this.inbox = inbox;
+        this.restrictions = restrictions;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -356,7 +369,7 @@ public class GameMutationService {
         Map<String, Object> payload = payload("chatId", chat.id().toString());
         payload.put("kind", chat.kind().name());
         payload.put("title", chat.title());
-        event(gameId, GameEventType.CHAT_CREATED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.CHAT_CREATED, actorUserId, chat.id(), null, payload);
         return chat;
     }
 
@@ -370,7 +383,7 @@ public class GameMutationService {
         requireText(title, "title_required", "Укажите название локации", Chat.TITLE_MAX);
 
         chats.updateContent(chatId, title.strip(), normalize(description));
-        event(gameId, GameEventType.CHAT_CONTENT_CHANGED, actorUserId,
+        eventInChat(gameId, GameEventType.CHAT_CONTENT_CHANGED, actorUserId, chatId, null,
                 payload("chatId", chatId.toString()));
         return chats.findById(chat.id()).orElseThrow();
     }
@@ -389,7 +402,7 @@ public class GameMutationService {
         requireText(reason, "archive_reason_required", "Укажите причину архивации", 500);
 
         chats.markArchived(chatId, reason.strip());
-        event(gameId, GameEventType.CHAT_ARCHIVED, actorUserId,
+        eventInChat(gameId, GameEventType.CHAT_ARCHIVED, actorUserId, chatId, null,
                 payload("chatId", chatId.toString()));
         return chats.findById(chatId).orElseThrow();
     }
@@ -476,7 +489,7 @@ public class GameMutationService {
         Map<String, Object> payload = payload("transitionId", transition.id().toString());
         payload.put("fromChatId", fromChatId.toString());
         payload.put("toChatId", toChatId.toString());
-        event(gameId, GameEventType.TRANSITION_OPENED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.TRANSITION_OPENED, actorUserId, fromChatId, null, payload);
         return transition;
     }
 
@@ -507,7 +520,7 @@ public class GameMutationService {
         requireText(reason, "archive_reason_required", "Укажите причину архивации", 500);
 
         transitions.markArchived(transitionId, reason.strip());
-        event(gameId, GameEventType.TRANSITION_ARCHIVED, actorUserId,
+        eventInChat(gameId, GameEventType.TRANSITION_ARCHIVED, actorUserId, transition.fromChatId(), null,
                 payload("transitionId", transitionId.toString()));
         return transitions.findById(transitionId).orElseThrow();
     }
@@ -556,7 +569,8 @@ public class GameMutationService {
         if (stored.reason() != null) {
             payload.put("reason", stored.reason());
         }
-        event(gameId, GameEventType.TRANSITION_STATE_CHANGED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.TRANSITION_STATE_CHANGED, actorUserId,
+                requireTransition(gameId, transitionId).fromChatId(), characterId, payload);
         return stored;
     }
 
@@ -710,14 +724,16 @@ public class GameMutationService {
         }
         if (current != null) {
             presence.close(current.id());
-            event(gameId, GameEventType.CHARACTER_LEFT, actorUserId, placementPayload(characterId, current));
+            eventInChat(gameId, GameEventType.CHARACTER_LEFT, actorUserId, current.chatId(), characterId,
+                    placementPayload(characterId, current));
         }
         // Скрытность переезжает вместе с персонажем: иначе перемещение скрытого персонажа
         // молча показало бы его всем в новой локации (`D-007`).
         boolean hidden = current != null && current.hidden();
         Presence placed = new Presence(Uuids.v7(), characterId, location.id(), hidden, Instant.now(), null);
         presence.insert(placed);
-        event(gameId, GameEventType.CHARACTER_ENTERED, actorUserId, placementPayload(characterId, placed));
+        eventInChat(gameId, GameEventType.CHARACTER_ENTERED, actorUserId, placed.chatId(), characterId,
+                placementPayload(characterId, placed));
         return placed;
     }
 
@@ -751,13 +767,15 @@ public class GameMutationService {
 
         presence.setHidden(current.id(), hidden);
         Presence stored = presence.findActive(characterId).orElseThrow();
-        event(gameId,
+        eventInChat(gameId,
                 hidden ? GameEventType.CHARACTER_STEALTHED : GameEventType.CHARACTER_REVEALED,
                 actorUserId,
+                current.chatId(),
+                characterId,
                 stealthPayload(characterId, current.chatId(), reason, hidden));
         if (hidden) {
-            event(gameId, GameEventType.CHARACTER_APPEARED_LEFT, actorUserId,
-                    stealthPayload(characterId, current.chatId(), reason, true));
+            eventInChat(gameId, GameEventType.CHARACTER_APPEARED_LEFT, actorUserId, current.chatId(),
+                    characterId, stealthPayload(characterId, current.chatId(), reason, true));
         }
         return stored;
     }
@@ -931,7 +949,7 @@ public class GameMutationService {
         if (characterId != null) {
             payload.put("characterId", characterId.toString());
         }
-        event(gameId, GameEventType.STORAGE_CREATED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.STORAGE_CREATED, actorUserId, chatId, characterId, payload);
         return storage;
     }
 
@@ -948,7 +966,7 @@ public class GameMutationService {
         }
 
         storages.updateContent(storageId, normalize(title), normalize(description));
-        event(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId,
+        eventInChat(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId, storage.chatId(), null,
                 payload("storageId", storageId.toString()));
         return storages.findById(storage.id()).orElseThrow();
     }
@@ -977,7 +995,7 @@ public class GameMutationService {
 
         Map<String, Object> payload = payload("storageId", storageId.toString());
         payload.put("assetId", assetId == null ? null : assetId.toString());
-        event(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId, storage.chatId(), null, payload);
 
         if (previous != null && !previous.equals(assetId)) {
             assetService.releaseIfUnreferenced(previous);
@@ -1005,7 +1023,7 @@ public class GameMutationService {
         storages.updateOpen(storageId, open);
         Map<String, Object> payload = payload("storageId", storageId.toString());
         payload.put("open", open);
-        event(gameId, GameEventType.STORAGE_ACCESS_CHANGED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.STORAGE_ACCESS_CHANGED, actorUserId, storage.chatId(), null, payload);
         return storages.findById(storageId).orElseThrow();
     }
 
@@ -1058,7 +1076,7 @@ public class GameMutationService {
         payload.put("type", itemType.name());
         payload.put("size", size.name());
         payload.put("quantity", amount);
-        event(gameId, GameEventType.ITEM_CREATED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.ITEM_CREATED, actorUserId, chatIdOfStorage(storageId), null, payload);
         return item;
     }
 
@@ -1084,7 +1102,8 @@ public class GameMutationService {
 
         items.updateContent(
                 itemId, itemType, name.strip(), normalize(description), itemSize, amount, normalize(properties));
-        event(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId,
+        eventInChat(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId,
+                chatIdOfStorage(items.findPlacement(itemId).map(p -> p.storageId()).orElse(null)), null,
                 payload("itemId", itemId.toString()));
         return items.findById(itemId).orElseThrow();
     }
@@ -1102,7 +1121,8 @@ public class GameMutationService {
 
         Map<String, Object> payload = payload("itemId", itemId.toString());
         payload.put("assetId", assetId == null ? null : assetId.toString());
-        event(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId,
+                chatIdOfStorage(items.findPlacement(itemId).map(p -> p.storageId()).orElse(null)), null, payload);
 
         if (previous != null && !previous.equals(assetId)) {
             assetService.releaseIfUnreferenced(previous);
@@ -1178,7 +1198,7 @@ public class GameMutationService {
             payload.put("newItemId", moved.id().toString());
         }
 
-        event(gameId, GameEventType.ITEM_MOVED, actorUserId, payload);
+        eventInChat(gameId, GameEventType.ITEM_MOVED, actorUserId, target.chatId(), null, payload);
         return new MoveResult(moved, storages.findById(placement.storageId()).orElse(null), target);
     }
 
@@ -1240,6 +1260,127 @@ public class GameMutationService {
         }
     }
 
+
+    /** Чат хранилища: у локационного он есть, у хранилища персонажа — нет. */
+    private UUID chatIdOfStorage(UUID storageId) {
+        return storageId == null
+                ? null
+                : storages.findById(storageId).map(Storage::chatId).orElse(null);
+    }
+
+    // --- Ограничения (E08) -----------------------------------------------------------
+
+    /**
+     * Навешивание ограничения (`REQUIREMENTS §13`, `D-064`). Причина обязательна: без неё
+     * через месяц игры никто не помнит, почему персонаж немой (`D-064`), а срок
+     * поддерживается, но не обязателен.
+     *
+     * <p>Субъект ограничения диктуется его видом: `NO_JOKE` целится в участие, потому что
+     * абьюзят шутками игроки, а не персонажи (`D-099`); остальные — в персонажа. Проверять
+     * это на входе, а не полагаться на клиента, обязательно: иначе запрет шуток лёг бы на
+     * персонажа и не сработал бы на участие.
+     *
+     * <p>Ограничение видно тому, кого оно касается, и мастеру: оно проецируется системным
+     * сообщением в ленту того чата, где субъект стоит (`D-031`), — иначе игрок узнаёт о
+     * немоем персонаже только по отказу при попытке заговорить.
+     */
+    @Transactional
+    public Restriction setRestriction(
+            UUID actorUserId,
+            UUID gameId,
+            SubjectKind subjectKind,
+            UUID subjectId,
+            RestrictionKind kind,
+            String reason,
+            Instant expiresAt) {
+        requireMaster(actorUserId, gameId);
+        if (kind == null) {
+            throw ApiException.badRequest("restriction_kind_required", "Укажите вид ограничения");
+        }
+        if (subjectKind == null || subjectId == null) {
+            throw ApiException.badRequest("restriction_subject_required", "Укажите, кому адресован запрет");
+        }
+        if (subjectKind != kind.subjectKind()) {
+            throw ApiException.badRequest(
+                    "restriction_subject_mismatch",
+                    kind == RestrictionKind.NO_JOKE
+                            ? "Запрет шуток адресуется участию, а не персонажу"
+                            : "Этот запрет адресуется персонажу");
+        }
+        requireText(reason, "restriction_reason_required", "Укажите причину запрета", Restriction.REASON_MAX);
+
+        InboxSubject subject = new InboxSubject(subjectKind, subjectId);
+        UUID chatId = requireRestrictionSubject(gameId, subject);
+
+        Restriction restriction = new Restriction(
+                Uuids.v7(),
+                gameId,
+                subject,
+                kind,
+                reason.strip(),
+                actorUserId,
+                Instant.now(),
+                expiresAt,
+                null);
+        restrictions.insert(restriction);
+
+        Map<String, Object> payload = payload("restrictionId", restriction.id().toString());
+        payload.put("subjectKind", subjectKind.name());
+        payload.put("subjectId", subjectId.toString());
+        payload.put("kind", kind.name());
+        if (chatId != null) {
+            payload.put("chatId", chatId.toString());
+        }
+        eventInChat(gameId, GameEventType.RESTRICTION_SET, actorUserId, chatId,
+                subjectKind == SubjectKind.CHARACTER ? subjectId : null, payload);
+        return restriction;
+    }
+
+    /** Снятие — штатная операция мастера, а не удаление: строка остаётся частью истории (`D-064`). */
+    @Transactional
+    public Restriction revokeRestriction(UUID actorUserId, UUID gameId, UUID restrictionId) {
+        requireMaster(actorUserId, gameId);
+        Restriction restriction = restrictions.findById(restrictionId)
+                .orElseThrow(() -> ApiException.notFound("restriction_not_found", "Запрет не найден"));
+        if (!restriction.gameId().equals(gameId)) {
+            throw ApiException.notFound("restriction_not_found", "Запрет не найден");
+        }
+        if (restriction.revokedAt() != null) {
+            return restriction;
+        }
+
+        restrictions.revoke(restrictionId);
+        Restriction stored = restrictions.findById(restrictionId).orElseThrow();
+        UUID chatId = requireRestrictionSubject(gameId, stored.subject());
+
+        Map<String, Object> payload = payload("restrictionId", restrictionId.toString());
+        payload.put("kind", stored.kind().name());
+        eventInChat(gameId, GameEventType.RESTRICTION_REVOKED, actorUserId, chatId,
+                stored.subject().kind() == SubjectKind.CHARACTER ? stored.subject().id() : null, payload);
+        return stored;
+    }
+
+    /**
+     * Субъект запрета обязан существовать в этой игре, а чат возвращается для проекции:
+     * у персонажа это место, где он стоит; у участия — нет, потому что у наблюдателя
+     * персонажа нет и ленты у него тоже (`D-063`).
+     */
+    private UUID requireRestrictionSubject(UUID gameId, InboxSubject subject) {
+        if (subject.kind() == SubjectKind.CHARACTER) {
+            requireCharacter(gameId, subject.id());
+            return presence.findActive(subject.id()).map(Presence::chatId).orElse(null);
+        }
+        Membership membership = memberships.findByGame(gameId).stream()
+                .filter(candidate -> candidate.id().equals(subject.id()))
+                .findFirst()
+                .orElseThrow(() -> ApiException.notFound("membership_not_found", "Участие не найдено"));
+        if (membership.role() == MembershipRole.OBSERVER) {
+            throw ApiException.badRequest(
+                    "observer_has_no_character", "Наблюдатель не пишет, запрет шуток ему не нужен");
+        }
+        return null;
+    }
+
     // --- Общие проверки ----------------------------------------------------------------
 
     /** Проверка права мастера на каждую мутацию, а не один раз при установке соединения (`D-065`). */
@@ -1288,6 +1429,40 @@ public class GameMutationService {
     }
 
     /**
+     * Событие, у которого есть место: чат, персонаж и признак «от лица мастера» попадают
+     * в соответствующие колонки журнала (`D-005`), а само событие проецируется в ленту
+     * этого чата системным сообщением (`D-031`). Отдельный метод, а не расширение
+     * {@link #event}, потому что у события без чата колонка обязана остаться пустой:
+     * `chat_id` читается потребителями журнала как «где это было».
+     */
+    private void eventInChat(
+            UUID gameId,
+            GameEventType type,
+            UUID actorUserId,
+            UUID chatId,
+            UUID characterId,
+            Map<String, Object> payload) {
+        long seq = events.append(
+                gameId, type, actorUserId, chatId, characterId, false, payloads.write(payload));
+        projectSystem(gameId, type, chatId, seq);
+    }
+
+    /**
+     * Проецирует событие в ленту чата системным сообщением (`D-031`). Словарь проекции
+     * отсеивает служебные события: то, у чего нет смысла в ленте (выдача номера, правка
+     * названия игры), остаётся только в журнале.
+     */
+    private void projectSystem(UUID gameId, GameEventType type, UUID chatId, long eventSeq) {
+        if (chatId == null || !SystemProjection.projects(type)) {
+            return;
+        }
+        Game game = games.findById(gameId).orElse(null);
+        if (game != null) {
+            inbox.materializeSystem(game, chatId, eventSeq, true);
+        }
+    }
+
+    /**
      * Точка, которой пользуются будущие сервисы внутри уже открытой транзакции: тогда событие
      * и эффект не могут разъехаться по разным транзакциям. `MANDATORY` выбран вместо
      * `REQUIRED`, чтобы отсутствие внешней транзакции падало, а не создавалось молча новое
@@ -1297,4 +1472,32 @@ public class GameMutationService {
     public long appendEvent(UUID gameId, GameEventType type, UUID actorUserId, Map<String, Object> payload) {
         return events.append(gameId, type, actorUserId, null, null, false, payloads.write(payload));
     }
+
+    /**
+     * Запись события сообщения: у него есть чат, автор-персонаж и признак «от лица
+     * мастера» (`D-005`), а номер выдаётся тем же счётчиком, что и у прочих мутаций
+     * (`D-033`). Вызывается из {@code MessageService} внутри его транзакции.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public long appendEvent(
+            UUID gameId,
+            GameEventType type,
+            UUID actorUserId,
+            Map<String, Object> payload,
+            UUID chatId,
+            UUID characterId,
+            boolean onBehalfOfMaster) {
+        return events.append(
+                gameId, type, actorUserId, chatId, characterId, onBehalfOfMaster, payloads.write(payload));
+    }
+
+    /**
+     * Проекция события в системное сообщение (`D-031`): событие мира, у которого чат —
+     * это место происходящего, обязано появиться в ленте этого чата. Материализуются
+     * только строки получателей; собственной строки в `message` у системного события нет,
+     * тело собирается из `payload` при чтении.
+     *
+     * <p>Вызывается после {@code event(...)}, потому что нужен выданный `seq`. Тип события
+     * проверяется по словарю проекции: служебное событие без чата в ленту не попадает.
+     */
 }

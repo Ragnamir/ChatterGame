@@ -235,6 +235,46 @@ case "$stage" in
       echo "  ok: E07 — предметы и хранилища не удаляются"
     fi
     ;;
+  E08)
+    # Системное сообщение — проекция журнала, а не строка `message` (`D-031`): проверка
+    # адресная, потому что соблазн «просто записать системку» убирает вторую правду
+    # о событии и расходится с `inbox_entry`, который ссылается на `message_id`.
+    if [ -f src/main/resources/db/changelog/changes/005-e08.yaml ]; then
+      echo "  ok: E08 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E08 требует changes/005-e08.yaml (выборка активных запретов)"
+    fi
+    # Права проверяются на каждое событие (`D-065`): точка входа обязана быть, иначе
+    # матрица живёт только в тестах.
+    if grep -rq 'assertCanPost' src/main/java/com/chattergame/message; then
+      echo "  ok: E08 — assertCanPost вызывается в пути записи"
+    else
+      fail=1
+      echo "FAIL: E08 требует применения assertCanPost в пути записи сообщения (D-065)"
+    fi
+    # Read-путь один: лента берётся из `inbox_entry` (`D-030`, `D-086`), а не отбирается
+    # по условиям на чтении. Правило проверяется и AST-тестом, здесь — адресом провала.
+    if grep -rq 'inbox_entry' src/main/java/com/chattergame/message/MessageRepository.java; then
+      echo "  ok: E08 — лента читается через inbox_entry (D-030)"
+    else
+      fail=1
+      echo "FAIL: E08 требует чтения ленты через inbox_entry (D-030)"
+    fi
+    # Отзыв и правка сообщений отсутствуют как API (`D-008`): ни удаления, ни UPDATE.
+    if grep -rnE 'DELETE FROM message|UPDATE message' src/main/java; then
+      fail=1
+      echo "FAIL: E08 — отзыв и правка сообщений запрещены (D-008)"
+    else
+      echo "  ok: E08 — сообщения не удаляются и не правятся (D-008)"
+    fi
+    if grep -rq '@RestController' src/main/java/com/chattergame/web/message; then
+      echo "  ok: E08 — веб-слой сообщений на месте"
+    else
+      fail=1
+      echo "FAIL: E08 требует эндпоинты сообщений, ленты и ограничений"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;
