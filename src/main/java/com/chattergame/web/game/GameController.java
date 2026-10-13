@@ -133,7 +133,7 @@ public class GameController {
         return Map.of("transitions", available);
     }
 
-    /** Валидация готовности (`REQUIREMENTS §20`). На `E03` каркас без реальных проверок. */
+    /** Валидация готовности (`REQUIREMENTS §20`): свод проверок включён целиком на `E07` (`D-112`). */
     @GetMapping("/{id}/readiness")
     public ReadinessReport readiness(@PathVariable UUID id, AuthContext context) {
         AuthContext auth = AuthContextResolver.require(context);

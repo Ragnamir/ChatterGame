@@ -735,6 +735,287 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/storages:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание хранилища
+      description: |
+        Только мастер (`D-109`). Тип решает владельца: у хранилища персонажа заполнен
+        `characterId`, у локационного и сундука — `chatId` (`D-016`). Хранилище персонажа
+        каждого типа одно, локационных и сундуков — сколько угодно (`REQUIREMENTS §10`).
+        Появившееся хранилище закрыто: доступ меняется отдельным вызовом (`D-110`).
+        Событие — `STORAGE_CREATED`.
+      operationId: createStorage
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StorageRequest' }
+      responses:
+        '201':
+          description: Хранилище создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/storages/{storageId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/StorageId'
+    patch:
+      summary: Правка названия и описания хранилища
+      description: 'Только мастер; открытость через этот вызов не меняется. Событие — `STORAGE_CONTENT_CHANGED`.'
+      operationId: updateStorage
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StorageRequest' }
+      responses:
+        '200':
+          description: Хранилище обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/storages/{storageId}/image:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/StorageId'
+    post:
+      summary: Картинка хранилища
+      description: |
+        `assetId == null` — снятие (`D-106`). Прежняя картинка отпускается тем же вызовом,
+        иначе замещённые файлы занимают диск навсегда (`D-077`). Событие — `STORAGE_CONTENT_CHANGED`.
+      operationId: setStorageImage
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageRequest' }
+      responses:
+        '200':
+          description: Ссылка на картинку сохранена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/storages/{storageId}/access:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/StorageId'
+    post:
+      summary: Открытие и закрытие хранилища
+      description: |
+        Мастер открывает и закрывает доступ (`D-110`). Идемпотентно: повторная установка
+        того же значения события не пишет, потому что мир не изменился. Событие —
+        `STORAGE_ACCESS_CHANGED`.
+      operationId: setStorageAccess
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StorageOpenRequest' }
+      responses:
+        '200':
+          description: Доступ сохранён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/locations/{chatId}/storages:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    get:
+      summary: Хранилища локации
+      description: |
+        Локационное хранилище и сундуки глазами запросившего. Содержимое закрытого сундука
+        не приходит ни строчкой, а хранилище отсутствующего персонажа не приходит вовсе
+        (`REQUIREMENTS §10`, `D-019`).
+      operationId: readLocationStorages
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Видимые хранилища локации
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Storage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/characters/{characterId}/storages:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    get:
+      summary: Хранилища персонажа
+      description: |
+        Оба хранилища персонажа: скрытое видит только владелец, видимое — те, кому виден
+        сам владелец, и только крупное содержимое (`D-019`, `D-017`).
+      operationId: readCharacterStorages
+      tags: [storage]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Видимые хранилища персонажа
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Storage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/items:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание предмета в хранилище
+      description: |
+        Только мастер (`D-109`). Предмета вне хранилища не бывает: строка размещения
+        создаётся здесь же (`D-015`). Количество больше единицы разрешено только исчисляемым
+        типам, по умолчанию — единица (`D-114`). Событие — `ITEM_CREATED`.
+      operationId: createItem
+      tags: [item]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemRequest' }
+      responses:
+        '201':
+          description: Предмет создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ItemId'
+    patch:
+      summary: Правка карточки предмета
+      description: |
+        Только мастер; размещение и количество через этот вызов не меняются — переезд
+        предмета и разделение стопки идут отдельным вызовом (`D-114`). Событие —
+        `ITEM_CONTENT_CHANGED`.
+      operationId: updateItem
+      tags: [item]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemRequest' }
+      responses:
+        '200':
+          description: Предмет обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/items/{itemId}/image:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ItemId'
+    post:
+      summary: Картинка предмета
+      description: '`assetId == null` — снятие; прежняя отпускается тем же вызовом (`D-077`).'
+      operationId: setItemImage
+      tags: [item]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImageRequest' }
+      responses:
+        '200':
+          description: Ссылка на картинку сохранена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/items/{itemId}/move:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ItemId'
+    post:
+      summary: Перемещение предмета
+      description: |
+        Гонка разрешается блокировкой строки предмета: проигравший получает `409` с кодом
+        `item_already_taken`, системного события проигравшему здесь нет (`D-015`, `D-113`).
+        `fromStorageId` — ожидаемое текущее хранилище; `null` означает «откуда угодно»
+        и доступен мастеру. Количество меньше текущего отделяет часть стопки новой строкой
+        (`D-114`). Событие — `ITEM_MOVED`.
+      operationId: moveItem
+      tags: [item]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemMoveRequest' }
+      responses:
+        '200':
+          description: Предмет перемещён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/assets:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -1053,6 +1334,16 @@ components:
       schema: { type: string, format: uuid }
     GameId:
       name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    StorageId:
+      name: storageId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ItemId:
+      name: itemId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -1385,6 +1676,88 @@ components:
         privateHistory: { type: [string, 'null'] }
         playable: { type: boolean }
         npc: { type: boolean }
+    StorageKind:
+      type: string
+      description: 'Тип хранилища (`D-016`). Хранилища персонажа по одному на тип, локационных больше.'
+      enum: [CHARACTER_HIDDEN, CHARACTER_VISIBLE, LOCATION, CHEST]
+    ItemType:
+      type: string
+      description: |
+        Закрытый перечень типов предмета (`D-114`). Списка в БД нет намеренно: он стал бы
+        второй правдой рядом с перечислением.
+      enum: [WEAPON, ARMOR, CLOTHING, TOOL, DOCUMENT, KEY, VALUABLE, CONSUMABLE, MONEY, QUEST, MISC]
+    ItemSize:
+      type: string
+      description: 'Размер решает, в какое из двух хранилищ персонажа предмет помещается (`D-111`).'
+      enum: [SMALL, LARGE]
+    StorageRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: '#/components/schemas/StorageKind' }
+        chatId: { type: [string, 'null'], format: uuid, description: 'Локация; обязательна для локационного хранилища и сундука' }
+        characterId: { type: [string, 'null'], format: uuid, description: 'Владелец; обязателен для хранилищ персонажа' }
+        title: { type: [string, 'null'], maxLength: 200 }
+        description: { type: [string, 'null'] }
+    StorageOpenRequest:
+      type: object
+      required: [open]
+      properties:
+        open: { type: boolean }
+    ImageRequest:
+      type: object
+      properties:
+        assetId: { type: [string, 'null'], format: uuid, description: '`null` — снятие картинки' }
+    Storage:
+      type: object
+      description: |
+        Хранилище глазами запросившего. `contentsVisible` отдельно от `items`: закрытый
+        сундук виден, а содержимое — нет (`REQUIREMENTS §10`).
+      required: [id, kind, open, contentsVisible]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/StorageKind' }
+        chatId: { type: [string, 'null'], format: uuid }
+        characterId: { type: [string, 'null'], format: uuid }
+        title: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        imageAssetId: { type: [string, 'null'], format: uuid }
+        open: { type: boolean }
+        contentsVisible: { type: boolean }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Item' }
+    ItemRequest:
+      type: object
+      required: [name, size]
+      properties:
+        type: { $ref: '#/components/schemas/ItemType' }
+        name: { type: string, maxLength: 200 }
+        description: { type: [string, 'null'] }
+        imageAssetId: { type: [string, 'null'], format: uuid }
+        size: { $ref: '#/components/schemas/ItemSize' }
+        quantity: { type: [integer, 'null'], description: 'Больше единицы — только у исчисляемых типов (`D-114`)' }
+        properties: { type: [string, 'null'] }
+        storageId: { type: [string, 'null'], format: uuid, description: 'Обязателен при создании; при правке не используется' }
+    ItemMoveRequest:
+      type: object
+      required: [storageId]
+      properties:
+        fromStorageId: { type: [string, 'null'], format: uuid, description: 'Ожидаемое текущее хранилище; `null` — откуда угодно' }
+        storageId: { type: string, format: uuid }
+        quantity: { type: [integer, 'null'], description: 'Меньше текущего — отделяется новая строка (`D-114`)' }
+    Item:
+      type: object
+      required: [id, type, name, size, quantity]
+      properties:
+        id: { type: string, format: uuid }
+        type: { $ref: '#/components/schemas/ItemType' }
+        name: { type: string }
+        description: { type: [string, 'null'] }
+        imageAssetId: { type: [string, 'null'], format: uuid }
+        size: { $ref: '#/components/schemas/ItemSize' }
+        quantity: { type: integer }
+        properties: { type: [string, 'null'] }
     Character:
       type: object
       description: |

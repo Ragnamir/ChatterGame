@@ -29,14 +29,16 @@ import java.util.UUID;
 public class AssetRepository {
 
     /**
-     * Колонки, из которых на ассет может ссылаться игровой мир. Хранилище и предметы
-     * добавляют свою ссылку своим этапом вместе с колонкой (`D-106`).
+     * Колонки, из которых на ассет может ссылаться игровой мир. Хранилище добавило свою
+     * ссылку на `E07` вместе с колонкой (`D-106`); `item.image_asset_id` в baseline уже был
+     * и в предикате стоял с самого начала.
      */
     private static final String REFERENCE_PREDICATE =
             "EXISTS (SELECT 1 FROM app_user r WHERE r.avatar_asset_id = %1$s) "
                     + "OR EXISTS (SELECT 1 FROM chat r WHERE r.image_asset_id = %1$s) "
                     + "OR EXISTS (SELECT 1 FROM character r WHERE r.portrait_asset_id = %1$s) "
-                    + "OR EXISTS (SELECT 1 FROM item r WHERE r.image_asset_id = %1$s)";
+                    + "OR EXISTS (SELECT 1 FROM item r WHERE r.image_asset_id = %1$s) "
+                    + "OR EXISTS (SELECT 1 FROM storage r WHERE r.image_asset_id = %1$s)";
 
     private static final String COLUMNS =
             "id, game_id, owner_user_id, mime, byte_size, width, height, sha256, "

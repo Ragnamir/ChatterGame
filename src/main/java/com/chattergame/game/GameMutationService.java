@@ -15,6 +15,16 @@ import com.chattergame.character.PresenceRepository;
 import com.chattergame.journal.GameEventRepository;
 import com.chattergame.journal.GameEventType;
 import com.chattergame.journal.Payloads;
+import com.chattergame.item.Item;
+import com.chattergame.item.ItemPlacement;
+import com.chattergame.item.ItemRepository;
+import com.chattergame.item.ItemSize;
+import com.chattergame.item.ItemType;
+import com.chattergame.item.MoveResult;
+import com.chattergame.item.PlacementRules;
+import com.chattergame.item.Storage;
+import com.chattergame.item.StorageKind;
+import com.chattergame.item.StorageRepository;
 import com.chattergame.media.Asset;
 import com.chattergame.media.AssetRepository;
 import com.chattergame.media.AssetService;
@@ -56,6 +66,8 @@ public class GameMutationService {
     private final TransitionStateRepository edgeStates;
     private final CharacterRepository characters;
     private final PresenceRepository presence;
+    private final StorageRepository storages;
+    private final ItemRepository items;
     private final AssetRepository assets;
     private final AssetService assetService;
 
@@ -70,6 +82,8 @@ public class GameMutationService {
             TransitionStateRepository edgeStates,
             CharacterRepository characters,
             PresenceRepository presence,
+            StorageRepository storages,
+            ItemRepository items,
             AssetRepository assets,
             AssetService assetService) {
         this.games = games;
@@ -82,6 +96,8 @@ public class GameMutationService {
         this.edgeStates = edgeStates;
         this.characters = characters;
         this.presence = presence;
+        this.storages = storages;
+        this.items = items;
         this.assets = assets;
         this.assetService = assetService;
     }
@@ -794,6 +810,7 @@ public class GameMutationService {
         return ApiException.conflict(code, message);
     }
 
+    /** Локация этой игры: чужая отдаётся как отсутствующая, чтобы не выдать её существование. */
     private Chat requireLocation(UUID gameId, UUID chatId) {
         Chat chat = chats.findById(chatId)
                 .orElseThrow(() -> ApiException.notFound("chat_not_found", "Локация не найдена"));
@@ -823,6 +840,404 @@ public class GameMutationService {
             throw ApiException.notFound("transition_not_found", "Переход не найден");
         }
         return transition;
+    }
+
+    /** Хранилище этой игры; чужое отдаётся как отсутствующее, чтобы не выдать его существование. */
+    private Storage requireStorage(UUID gameId, UUID storageId) {
+        Storage storage = storages.findById(storageId)
+                .orElseThrow(() -> ApiException.notFound("storage_not_found", "Хранилище не найдено"));
+        if (!storage.gameId().equals(gameId)) {
+            throw ApiException.notFound("storage_not_found", "Хранилище не найдено");
+        }
+        return storage;
+    }
+
+    /** Предмет этой игры; чужой отдаётся как отсутствующий, чтобы не выдать его существование. */
+    private Item requireItem(UUID gameId, UUID itemId) {
+        Item item = items.findById(itemId)
+                .orElseThrow(() -> ApiException.notFound("item_not_found", "Предмет не найден"));
+        if (!item.gameId().equals(gameId)) {
+            throw ApiException.notFound("item_not_found", "Предмет не найден");
+        }
+        return item;
+    }
+
+    // --- Хранилища и предметы (E07) ----------------------------------------------------
+
+    /**
+     * Создание хранилища (`REQUIREMENTS §10`, `D-016`). Мастер заводит и локационное
+     * хранилище с сундуком, и два хранилища персонажа (`D-110`).
+     *
+     * <p>Открывать хранилище при создании нельзя: доступ — отдельная мутация со своим
+     * событием, иначе открытие не отличалось бы в журнале от появления хранилища.
+     */
+    @Transactional
+    public Storage createStorage(
+            UUID actorUserId,
+            UUID gameId,
+            StorageKind kind,
+            UUID chatId,
+            UUID characterId,
+            String title,
+            String description) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        if (kind == null) {
+            throw ApiException.badRequest("storage_kind_required", "Укажите тип хранилища");
+        }
+        if (kind.belongsToCharacter()) {
+            if (characterId == null) {
+                throw ApiException.badRequest("storage_character_required", "Укажите персонажа-владельца");
+            }
+            requireCharacter(gameId, characterId);
+            if (chatId != null) {
+                throw ApiException.badRequest("storage_owner_conflict", "Хранилище персонажа не привязано к локации");
+            }
+            if (storages.findByCharacterAndKind(characterId, kind).isPresent()) {
+                throw ApiException.conflict("storage_already_exists", "У персонажа уже есть такое хранилище");
+            }
+        } else {
+            if (chatId == null) {
+                throw ApiException.badRequest("storage_chat_required", "Укажите локацию хранилища");
+            }
+            requireLocation(gameId, chatId);
+            if (characterId != null) {
+                throw ApiException.badRequest("storage_owner_conflict", "Локационное хранилище не принадлежит персонажу");
+            }
+        }
+        if (title != null && !title.isBlank() && title.strip().length() > Storage.TITLE_MAX) {
+            throw ApiException.badRequest(
+                    "title_too_long", "Название хранилища: до " + Storage.TITLE_MAX + " знаков");
+        }
+
+        Storage storage = new Storage(
+                Uuids.v7(),
+                gameId,
+                kind,
+                chatId,
+                characterId,
+                normalize(title),
+                normalize(description),
+                null,
+                false,
+                Instant.now());
+        storages.insert(storage);
+
+        Map<String, Object> payload = payload("storageId", storage.id().toString());
+        payload.put("kind", kind.name());
+        if (chatId != null) {
+            payload.put("chatId", chatId.toString());
+        }
+        if (characterId != null) {
+            payload.put("characterId", characterId.toString());
+        }
+        event(gameId, GameEventType.STORAGE_CREATED, actorUserId, payload);
+        return storage;
+    }
+
+    /** Правка названия и описания хранилища; открытость — отдельная мутация. */
+    @Transactional
+    public Storage updateStorage(
+            UUID actorUserId, UUID gameId, UUID storageId, String title, String description) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Storage storage = requireStorage(gameId, storageId);
+        if (title != null && !title.isBlank() && title.strip().length() > Storage.TITLE_MAX) {
+            throw ApiException.badRequest(
+                    "title_too_long", "Название хранилища: до " + Storage.TITLE_MAX + " знаков");
+        }
+
+        storages.updateContent(storageId, normalize(title), normalize(description));
+        event(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId,
+                payload("storageId", storageId.toString()));
+        return storages.findById(storage.id()).orElseThrow();
+    }
+
+    /**
+     * Установка или снятие картинки хранилища (`D-098`). Прежняя снимается тем же вызовом:
+     * `D-077` требует переключить указатель и отпустить старый, иначе замещённые файлы
+     * занимают диск навсегда.
+     */
+    @Transactional
+    public Storage setStorageImage(UUID actorUserId, UUID gameId, UUID storageId, UUID assetId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Storage storage = requireStorage(gameId, storageId);
+
+        if (assetId != null) {
+            Asset asset = assets.findById(assetId)
+                    .orElseThrow(() -> ApiException.notFound("asset_not_found", "Ассет не найден"));
+            if (!asset.gameId().equals(gameId)) {
+                throw ApiException.badRequest("asset_other_game", "Ассет принадлежит другой игре");
+            }
+        }
+
+        UUID previous = storage.imageAssetId();
+        storages.updateImage(storageId, assetId);
+
+        Map<String, Object> payload = payload("storageId", storageId.toString());
+        payload.put("assetId", assetId == null ? null : assetId.toString());
+        event(gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId, payload);
+
+        if (previous != null && !previous.equals(assetId)) {
+            assetService.releaseIfUnreferenced(previous);
+        }
+        return storages.findById(storageId).orElseThrow();
+    }
+
+    /**
+     * Открытие и закрытие хранилища (`REQUIREMENTS §10`, `D-110`). Одно событие с признаком
+     * в `payload`, а не два типа: меняется одно поле, и «открыто» с «закрыто» не должны
+     * расходиться по словарю.
+     *
+     * <p>Идемпотентно: повторная установка того же значения не пишет событие, потому что мир
+     * не изменился.
+     */
+    @Transactional
+    public Storage setStorageOpen(UUID actorUserId, UUID gameId, UUID storageId, boolean open) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Storage storage = requireStorage(gameId, storageId);
+        if (storage.open() == open) {
+            return storage;
+        }
+
+        storages.updateOpen(storageId, open);
+        Map<String, Object> payload = payload("storageId", storageId.toString());
+        payload.put("open", open);
+        event(gameId, GameEventType.STORAGE_ACCESS_CHANGED, actorUserId, payload);
+        return storages.findById(storageId).orElseThrow();
+    }
+
+    /**
+     * Создание предмета сразу в хранилище (`REQUIREMENTS §10`). Предмета вне хранилища не
+     * бывает: строка `item_placement` создаётся здесь же, и это держит уникальный индекс.
+     *
+     * <p>Количество ограничено типом: у неисчисляемого типа оно всегда `1` (`D-114`).
+     */
+    @Transactional
+    public Item createItem(
+            UUID actorUserId,
+            UUID gameId,
+            ItemType type,
+            String name,
+            String description,
+            UUID imageAssetId,
+            ItemSize size,
+            Integer quantity,
+            String properties,
+            UUID storageId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Storage storage = requireStorage(gameId, storageId);
+        ItemType itemType = type == null ? ItemType.MISC : type;
+        if (size == null) {
+            throw ApiException.badRequest("item_size_required", "Укажите размер предмета");
+        }
+        requireText(name, "item_name_required", "Укажите название предмета", Item.NAME_MAX);
+        int amount = requireQuantity(itemType, quantity);
+        requireItemImageOfGame(gameId, imageAssetId);
+
+        Instant now = Instant.now();
+        Item item = new Item(
+                Uuids.v7(),
+                gameId,
+                itemType,
+                name.strip(),
+                normalize(description),
+                imageAssetId,
+                size,
+                amount,
+                normalize(properties),
+                now,
+                now);
+        items.insert(item, storageId);
+
+        Map<String, Object> payload = payload("itemId", item.id().toString());
+        payload.put("storageId", storageId.toString());
+        payload.put("type", itemType.name());
+        payload.put("size", size.name());
+        payload.put("quantity", amount);
+        event(gameId, GameEventType.ITEM_CREATED, actorUserId, payload);
+        return item;
+    }
+
+    /** Правка карточки предмета. Размещение и количество через этот вызов не меняются. */
+    @Transactional
+    public Item updateItem(
+            UUID actorUserId,
+            UUID gameId,
+            UUID itemId,
+            ItemType type,
+            String name,
+            String description,
+            ItemSize size,
+            Integer quantity,
+            String properties) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Item item = requireItem(gameId, itemId);
+        ItemType itemType = type == null ? item.type() : type;
+        ItemSize itemSize = size == null ? item.size() : size;
+        requireText(name, "item_name_required", "Укажите название предмета", Item.NAME_MAX);
+        int amount = requireQuantity(itemType, quantity == null ? item.quantity() : quantity);
+
+        items.updateContent(
+                itemId, itemType, name.strip(), normalize(description), itemSize, amount, normalize(properties));
+        event(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId,
+                payload("itemId", itemId.toString()));
+        return items.findById(itemId).orElseThrow();
+    }
+
+    /** Картинка предмета; прежняя отпускается тем же правилом, что у локации и хранилища (`D-077`). */
+    @Transactional
+    public Item setItemImage(UUID actorUserId, UUID gameId, UUID itemId, UUID assetId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Item item = requireItem(gameId, itemId);
+        requireItemImageOfGame(gameId, assetId);
+
+        UUID previous = item.imageAssetId();
+        items.updateImage(itemId, assetId);
+
+        Map<String, Object> payload = payload("itemId", itemId.toString());
+        payload.put("assetId", assetId == null ? null : assetId.toString());
+        event(gameId, GameEventType.ITEM_CONTENT_CHANGED, actorUserId, payload);
+
+        if (previous != null && !previous.equals(assetId)) {
+            assetService.releaseIfUnreferenced(previous);
+        }
+        return items.findById(itemId).orElseThrow();
+    }
+
+    /**
+     * Перемещение предмета (`REQUIREMENTS §10`, `D-015`). Гонка разрешается блокировкой строки
+     * предмета: пока транзакция держит строку, вторая видит уже применённый результат первой.
+     *
+     * <p>`fromStorageId` — ожидаемое текущее хранилище. Это и есть реализация `D-015`:
+     * блокировка сама по себе не мешает второму запросу увезти предмет дальше, а условная
+     * проверка источника отвечает «предмет уже забран» тому, кто читал состояние до победителя.
+     * Мастер вправе не указывать источник и перенести предмет откуда угодно.
+     *
+     * <p>`quantity` меньше текущего количества отделяет часть стопки новой строкой: удалять
+     * строки и оставлять нули нельзя (`D-010`, `D-114`). Полное взятие перемещает саму строку.
+     */
+    @Transactional
+    public MoveResult moveItem(
+            UUID actorUserId,
+            UUID gameId,
+            UUID itemId,
+            UUID fromStorageId,
+            UUID targetStorageId,
+            Integer quantity) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        if (targetStorageId == null) {
+            throw ApiException.badRequest("storage_required", "Укажите хранилище назначения");
+        }
+        Storage target = requireStorage(gameId, targetStorageId);
+
+        Item item = items.lockById(itemId)
+                .orElseThrow(() -> ApiException.notFound("item_not_found", "Предмет не найден"));
+        if (!item.gameId().equals(gameId)) {
+            throw ApiException.notFound("item_not_found", "Предмет не найден");
+        }
+        ItemPlacement placement = items.findPlacement(itemId)
+                .orElseThrow(() -> ApiException.conflict(
+                        "item_without_storage", "Предмет вне хранилища — состояние недопустимо"));
+        if (fromStorageId != null && !fromStorageId.equals(placement.storageId())) {
+            throw ApiException.conflict("item_already_taken", "Предмет уже забран");
+        }
+        if (placement.storageId().equals(targetStorageId)) {
+            throw ApiException.conflict("item_already_there", "Предмет уже в этом хранилище");
+        }
+        requireCapacity(target, item);
+
+        int amount = quantity == null ? item.quantity() : requireQuantity(item.type(), quantity);
+        if (amount > item.quantity()) {
+            throw ApiException.badRequest("quantity_too_large", "Взять больше, чем есть, нельзя");
+        }
+        if (amount < item.quantity() && !item.type().countable()) {
+            throw ApiException.badRequest(
+                    "item_not_countable", "Из этого предмета нельзя взять часть");
+        }
+
+        Map<String, Object> payload = payload("itemId", itemId.toString());
+        payload.put("storageId", targetStorageId.toString());
+        payload.put("fromStorageId", placement.storageId().toString());
+        payload.put("quantity", amount);
+
+        Item moved;
+        if (amount == item.quantity()) {
+            items.movePlacement(itemId, targetStorageId);
+            moved = items.findById(itemId).orElseThrow();
+        } else {
+            items.updateQuantity(itemId, item.quantity() - amount);
+            moved = copyOf(item, amount);
+            items.insert(moved, targetStorageId);
+            payload.put("newItemId", moved.id().toString());
+        }
+
+        event(gameId, GameEventType.ITEM_MOVED, actorUserId, payload);
+        return new MoveResult(moved, storages.findById(placement.storageId()).orElse(null), target);
+    }
+
+    /**
+     * Вместимость (`D-111`). Ограничение адресовано игроку и касается только двух хранилищ
+     * персонажа; мастер не ограничен нигде (`D-015`).
+     *
+     * <p>Ветка оживает вместе с занятостью (`E13`, `D-109`): сейчас все мутации ведёт мастер,
+     * и правило сюда не доходит. Оно стоит здесь, а не в `E13`, чтобы не разойтись с кодом
+     * перемещения, а его истинность держит тест этапа через {@link PlacementRules}.
+     */
+    private void requireCapacity(Storage target, Item item) {
+        if (target.kind().belongsToCharacter() && !PlacementRules.fits(target.kind(), item.size())) {
+            throw ApiException.badRequest(
+                    "item_does_not_fit",
+                    item.size() == ItemSize.LARGE
+                            ? "Крупный предмет не помещается в мелкое хранилище персонажа"
+                            : "Мелкий предмет не кладётся в крупное хранилище персонажа");
+        }
+    }
+
+    /** Отделённая часть стопки: та же карточка, другое количество и своя строка (`D-114`). */
+    private static Item copyOf(Item source, int quantity) {
+        Instant now = Instant.now();
+        return new Item(
+                Uuids.v7(),
+                source.gameId(),
+                source.type(),
+                source.name(),
+                source.description(),
+                source.imageAssetId(),
+                source.size(),
+                quantity,
+                source.properties(),
+                now,
+                now);
+    }
+
+    private int requireQuantity(ItemType type, Integer quantity) {
+        int amount = quantity == null ? 1 : quantity;
+        if (amount < 1) {
+            throw ApiException.badRequest("quantity_invalid", "Количество не может быть меньше единицы");
+        }
+        if (!type.countable() && amount != 1) {
+            throw ApiException.badRequest(
+                    "item_not_countable", "У этого типа предмета количество всегда единица");
+        }
+        return amount;
+    }
+
+    private void requireItemImageOfGame(UUID gameId, UUID imageAssetId) {
+        if (imageAssetId == null) {
+            return;
+        }
+        Asset asset = assets.findById(imageAssetId)
+                .orElseThrow(() -> ApiException.notFound("asset_not_found", "Ассет не найден"));
+        if (!asset.gameId().equals(gameId)) {
+            throw ApiException.badRequest("asset_other_game", "Ассет принадлежит другой игре");
+        }
     }
 
     // --- Общие проверки ----------------------------------------------------------------

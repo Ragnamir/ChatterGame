@@ -205,6 +205,36 @@ case "$stage" in
       echo "FAIL: E06 требует changes/003-e06.yaml (присутствие и его ограничения)"
     fi
     ;;
+  E07)
+    # Предмет этапа — гонка за строкой в Postgres, поэтому проверки адресные: REST-слой здесь
+    # ничего не доказывает (и по PLAN E07 не обязателен), а вот блокировка строки, количество
+    # и вместимость обязаны быть в коде, а не на словах.
+    if [ -f src/main/resources/db/changelog/changes/004-e07.yaml ]; then
+      echo "  ok: E07 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E07 требует changes/004-e07.yaml (тип, количество и картинка хранилища)"
+    fi
+    if grep -rq 'FOR UPDATE' src/main/java/com/chattergame/item/ItemRepository.java; then
+      echo "  ok: E07 — предмет берётся с блокировкой строки (D-015)"
+    else
+      fail=1
+      echo "FAIL: E07 требует SELECT ... FOR UPDATE на предмете (D-015)"
+    fi
+    if grep -rq 'chk_item_quantity_positive' src/main/resources/db/changelog/changes/004-e07.yaml; then
+      echo "  ok: E07 — количество не меньше единицы держит база"
+    else
+      fail=1
+      echo "FAIL: E07 требует ограничение количества на уровне схемы (D-114)"
+    fi
+    # Стопка отделяется новой строкой, а не обнулением исходной (`D-010`, `D-114`).
+    if grep -rqE 'DELETE FROM (item|item_placement|storage)' src/main/java; then
+      fail=1
+      echo "FAIL: E07 — удаление предметов и хранилищ запрещено (D-010)"
+    else
+      echo "  ok: E07 — предметы и хранилища не удаляются"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

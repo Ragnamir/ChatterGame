@@ -1,0 +1,103 @@
+databaseChangeLog:
+  # E07: хранилища и предметы. Применённые `001-baseline.yaml`, `002-e04.yaml` и
+  # `003-e06.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Таблиц новых нет: `storage`, `item` и `item_placement` объявлены в baseline
+  # (`001-17…001-19`), и `PLAN` не расходится с `contract/expected-tables.txt` (`D-103`).
+  # Этап добавляет то, чего baseline не знал: тип и количество предмета и картинку
+  # хранилища (`D-098`, `D-106`, `D-114`).
+
+  - changeSet:
+      id: 004-01-item-type
+      author: e07
+      changes:
+        # Тип предмета (`D-114`). Значение по умолчанию `MISC` нужно не для новых строк —
+        # его выставляет код, — а чтобы колонка стала `NOT NULL` на непустой таблице: без
+        # него Liquibase не сможет добавить обязательную колонку в уже работающую базу.
+        #
+        # Список типов намеренно не ограничен `CHECK`: он обязан расширяться без новой
+        # миграции, а применённый changeset неизменяем (`AGENTS §1`). Совпадение словаря
+        # в коде и в API держит тест, а не база.
+        - addColumn:
+            tableName: item
+            columns:
+              - column:
+                  name: type
+                  type: varchar(16)
+                  defaultValue: MISC
+                  constraints: { nullable: false }
+
+  - changeSet:
+      id: 004-02-item-quantity
+      author: e07
+      changes:
+        # Количество единиц (`D-114`). У неисчисляемых типов всегда 1; само это правило
+        # зависит от словаря типов и живёт в сервисе, а вот «количество не меньше единицы»
+        # от словаря не зависит и потому стоит в базе: строка с нулём не должна появиться
+        # даже при ошибке в коде.
+        #
+        # Ограничение задано сырым `sql`: `addCheckConstraint` — changeset Liquibase Pro,
+        # и на открытой лицензии changelog с ним не парсится вообще.
+        - addColumn:
+            tableName: item
+            columns:
+              - column:
+                  name: quantity
+                  type: int
+                  defaultValueNumeric: 1
+                  constraints: { nullable: false }
+        - sql:
+            sql: ALTER TABLE item ADD CONSTRAINT chk_item_quantity_positive CHECK (quantity >= 1)
+            rollback: ALTER TABLE item DROP CONSTRAINT chk_item_quantity_positive
+
+  - changeSet:
+      id: 004-03-storage-image
+      author: e07
+      changes:
+        # Одна картинка на сущность (`D-098`): хранилище — такая же сущность, как локация и
+        # персонаж, и `D-106` отдал эту колонку `E07` вместе с расширением списка ссылок
+        # орфан-сборщика. Ссылка на `asset` без внешнего ключа — как у `chat` и `character`:
+        # орфан-сборщик и есть проверка ссылок (`D-077`), а FK запретил бы чистить ассеты
+        # пачкой.
+        - addColumn:
+            tableName: storage
+            columns:
+              - column: { name: image_asset_id, type: uuid }
+
+  - changeSet:
+      id: 004-04-storage-chat-index
+      author: e07
+      changes:
+        # Содержимое локационного чата читается по его хранилищам. Индекс частичный, потому
+        # что строки чата — только `LOCATION` и `CHEST`, а строки персонажа сюда не попадают.
+        # Предикат задан сырым `sql`: `createIndex` в Liquibase молча игнорирует `where`
+        # и создал бы полный индекс — на `E06` так уже получился полный unique вместо
+        # частичного (`003-e06.yaml`).
+        - sql:
+            sql: CREATE INDEX ix_storage_chat ON storage (chat_id) WHERE chat_id IS NOT NULL
+            rollback: DROP INDEX ix_storage_chat
+
+  - changeSet:
+      id: 004-05-storage-character-index
+      author: e07
+      changes:
+        # Два хранилища персонажа читаются вместе с его карточкой и графом.
+        - sql:
+            sql: >-
+              CREATE INDEX ix_storage_character ON storage (character_id)
+              WHERE character_id IS NOT NULL
+            rollback: DROP INDEX ix_storage_character
+
+  - changeSet:
+      id: 004-06-storage-one-per-kind
+      author: e07
+      changes:
+        # У персонажа ровно по одному хранилищу каждого типа (`REQUIREMENTS §10`). Держит
+        # это индекс, а не сервис: два одновременных создания дали бы два мелких хранилища,
+        # и предметы разошлись бы по двум «сумкам» одного персонажа. Индекс частичный —
+        # локационные хранилища к персонажу не привязаны, и `character_id` у них пуст.
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX ux_storage_character_kind ON storage (character_id, kind)
+              WHERE character_id IS NOT NULL
+            rollback: DROP INDEX ux_storage_character_kind

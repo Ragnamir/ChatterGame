@@ -353,6 +353,9 @@ class E06CharacterTest extends E02TestSupport {
     void deletingACharacterIsRefusedBeforeAndAfterReady() throws Exception {
         Fixture fixture = masterWithGame();
         UUID character = fixture.character("Иван", "Высокий", null, null);
+        // Размещение нужно, чтобы игра дошла до `READY`: с `E07` это блокирующая проверка
+        // готовности (`D-112`), а тест проверяет отказ в удалении именно после старта.
+        fixture.place(character, fixture.location("Зал"));
 
         MvcResult before = call(
                 delete("/games/" + fixture.gameId() + "/characters/" + character), fixture.token(), null);
@@ -585,6 +588,11 @@ class E06CharacterTest extends E02TestSupport {
          * Второй участник игры: роль `PLAYER` со своим персонажем-наблюдателем — «чужой» для
          * карточек первого. Занятие выставлено прямо в базе: эндпоинт занятия им владеет `E13`,
          * а граф уже сейчас пускает игрока только своим персонажем (`D-102`).
+         *
+         * <p>Наблюдатель ставится в отдельную локацию, а не в ту, что проверяет тест: с `E07`
+         * валидация готовности (`D-112`) требует размещения играбельного персонажа, поэтому
+         * «нигде» его оставить нельзя. Отдельная локация сохраняет предмет прежних проверок —
+         * списки присутствующих в проверяемой локации не должны измениться.
          */
         private Viewer player() throws Exception {
             String login = unique("Игрок");
@@ -597,6 +605,7 @@ class E06CharacterTest extends E02TestSupport {
                     userId, gameId, playerId, MembershipRole.PLAYER, MembershipStatus.JOINED).id();
             UUID observer = UUID.fromString(readField(call(post("/games/" + gameId + "/characters"), token,
                     card("Наблюдатель", null, null, null)), "id"));
+            place(observer, location("Окрестности " + unique("О")));
             jdbc.update("UPDATE character SET occupant_membership_id = ? WHERE id = ?",
                     membershipId, observer);
             return new Viewer(loginAndGetToken(login, OTHER_PASSWORD), observer);

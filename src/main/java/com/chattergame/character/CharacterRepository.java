@@ -77,6 +77,17 @@ public class CharacterRepository {
                 .findFirst();
     }
 
+    /**
+     * Персонажи, занятые данным участием (`REQUIREMENTS §9`). Нужны чтению хранилищ: следом
+     * за игроком идут его персонажи, и «виден ли владелец» спрашивается про них.
+     */
+    public List<Character> findByOccupant(UUID membershipId) {
+        return jdbc.query(
+                "SELECT " + COLUMNS + " FROM character WHERE occupant_membership_id = ?",
+                mapper,
+                membershipId);
+    }
+
     /** Обновление карточки целиком: частичная запись полей разошлась бы со снимком у читателей. */
     public void updateCard(Character character) {
         jdbc.update(
