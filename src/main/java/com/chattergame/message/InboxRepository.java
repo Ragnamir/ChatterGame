@@ -62,6 +62,21 @@ public class InboxRepository {
         return count == null ? 0L : count;
     }
 
+    /** Непрочитанное в одном чате: счётчик мета-события сокета выводится из этих же строк (`D-036`). */
+    public long unreadIn(InboxSubject subject, UUID chatId) {
+        Long count = jdbc.queryForObject(
+                "SELECT count(*) FROM inbox_entry i "
+                        + "LEFT JOIN read_cursor r ON r.subject_kind = i.subject_kind "
+                        + "AND r.subject_id = i.subject_id AND r.chat_id = i.chat_id "
+                        + "WHERE i.subject_kind = ? AND i.subject_id = ? AND i.chat_id = ? "
+                        + "AND i.event_seq > coalesce(r.last_seq, 0)",
+                Long.class,
+                subject.kind().name(),
+                subject.id(),
+                chatId);
+        return count == null ? 0L : count;
+    }
+
     /** Непрочитанное по чатам: то, что содержит лента (`D-036`), а не отдельный счётчик. */
     public List<Unread> unread(InboxSubject subject) {
         return jdbc.query(

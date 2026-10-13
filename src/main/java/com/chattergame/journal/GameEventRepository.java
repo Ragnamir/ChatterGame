@@ -112,6 +112,20 @@ public class GameEventRepository {
                 limit);
     }
 
+    /**
+     * Одно событие по номеру. Нужно рассылке (`E09`): уведомление несёт только ссылку
+     * `(game_id, seq)`, тело читается здесь (`D-084`).
+     */
+    public java.util.Optional<GameEvent> find(UUID gameId, long seq) {
+        return jdbc.query(
+                        "SELECT " + COLUMNS + " FROM game_event WHERE game_id = ? AND seq = ?",
+                        mapper,
+                        gameId,
+                        seq)
+                .stream()
+                .findFirst();
+    }
+
     public long lastSeq(UUID gameId) {
         Long seq = jdbc.queryForObject(
                 "SELECT last_seq FROM game_stream WHERE game_id = ?", Long.class, gameId);

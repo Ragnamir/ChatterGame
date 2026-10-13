@@ -22,6 +22,9 @@ val tools = sourceSets.create("tools") {
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
+    // Реалтайм (`D-035`, `D-073`): Spring WebSocket без STOMP, собственные JSON-события.
+    // Зависимость нужна этапу E09, а не «на будущее»: сокет — его предмет.
+    implementation("org.springframework.boot:spring-boot-starter-websocket")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-mail")
@@ -36,7 +39,10 @@ dependencies {
     // `ImageIO` его не читает вовсе: проверено — `webp readable: false`. Плагин закрывает
     // ровно этот формат (`D-105`); остальные три читает JDK.
     implementation("com.twelvemonkeys.imageio:imageio-webp:3.15.3")
-    runtimeOnly("org.postgresql:postgresql")
+    // Область драйвера поднята из runtime в compile: `PostgresNotifyFanout` слушает канал
+    // `LISTEN/NOTIFY` и разбирает уведомления через `PGConnection` (`D-084`). Тот же драйвер,
+    // не новая зависимость — меняется только видимость на компиляции.
+    implementation("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation(platform("org.testcontainers:testcontainers-bom:1.21.4"))

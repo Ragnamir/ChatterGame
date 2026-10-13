@@ -71,7 +71,7 @@ public class MessageQueryService {
     @Transactional(readOnly = true)
     public FeedPage feed(UUID userId, UUID gameId, UUID chatId, UUID asCharacter, long afterSeq, int limit) {
         Game game = games.requireReadable(userId, gameId);
-        Chat chat = requireChat(gameId, chatId);
+        Chat chat = requireChatInternal(gameId, chatId);
         InboxSubject subject = subjectFor(game, userId, asCharacter);
         int size = limit <= 0 ? MAX_PAGE : Math.min(limit, MAX_PAGE);
         List<FeedItem> items = messages.feed(gameId, subject, chatId, Math.max(afterSeq, 0L), size);
@@ -89,7 +89,7 @@ public class MessageQueryService {
     @Transactional(readOnly = true)
     public FeedItem entryMessage(UUID userId, UUID gameId, UUID chatId, UUID asCharacter) {
         Game game = games.requireReadable(userId, gameId);
-        requireChat(gameId, chatId);
+        requireChatInternal(gameId, chatId);
         InboxSubject subject = subjectFor(game, userId, asCharacter);
         return messages.lastFor(gameId, subject, chatId).orElse(null);
     }
@@ -149,13 +149,29 @@ public class MessageQueryService {
         return InboxSubject.character(asCharacter);
     }
 
-    private Chat requireChat(UUID gameId, UUID chatId) {
+    private Chat requireChatInternal(UUID gameId, UUID chatId) {
         Chat chat = chats.findById(chatId)
                 .orElseThrow(() -> ApiException.notFound("chat_not_found", "Чат не найден"));
         if (!chat.gameId().equals(gameId)) {
             throw ApiException.notFound("chat_not_found", "Чат не найден");
         }
         return chat;
+    }
+
+    /**
+     * Публичная точка разрешения субъекта для сокета (`E09`): socket-слой обязан читать
+     * теми же глазами, что HTTP-лента, иначе видимость разошлась бы между каналами.
+     */
+    @Transactional(readOnly = true)
+    public InboxSubject resolveSubject(UUID userId, UUID gameId, UUID asCharacter) {
+        Game game = games.requireReadable(userId, gameId);
+        return subjectFor(game, userId, asCharacter);
+    }
+
+    /** Чат игры с проверкой принадлежности: общая точка для HTTP и сокета (`E09`). */
+    @Transactional(readOnly = true)
+    public Chat requireChat(UUID gameId, UUID chatId) {
+        return requireChatInternal(gameId, chatId);
     }
 
     /** Страница ленты: строки и метки, которые клиент держит между запросами (`D-083`). */

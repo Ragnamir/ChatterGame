@@ -28,6 +28,7 @@ import com.chattergame.item.StorageRepository;
 import com.chattergame.media.Asset;
 import com.chattergame.media.AssetRepository;
 import com.chattergame.message.InboxMaterializer;
+import com.chattergame.realtime.RealtimeEvents;
 import com.chattergame.message.InboxSubject;
 import com.chattergame.message.SubjectKind;
 import com.chattergame.message.SystemProjection;
@@ -79,6 +80,7 @@ public class GameMutationService {
     private final AssetService assetService;
     private final InboxMaterializer inbox;
     private final RestrictionRepository restrictions;
+    private final RealtimeEvents realtime;
 
     public GameMutationService(
             GameRepository games,
@@ -96,7 +98,8 @@ public class GameMutationService {
             AssetRepository assets,
             AssetService assetService,
             InboxMaterializer inbox,
-            RestrictionRepository restrictions) {
+            RestrictionRepository restrictions,
+            RealtimeEvents realtime) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
@@ -113,6 +116,7 @@ public class GameMutationService {
         this.assetService = assetService;
         this.inbox = inbox;
         this.restrictions = restrictions;
+        this.realtime = realtime;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -1425,7 +1429,27 @@ public class GameMutationService {
     }
 
     private void event(UUID gameId, GameEventType type, UUID actorUserId, Map<String, Object> payload) {
-        events.append(gameId, type, actorUserId, null, null, false, payloads.write(payload));
+        record(gameId, type, actorUserId, null, null, false, payload);
+    }
+
+    /**
+     * Единственная точка записи события: номер выдаётся счётчиком, а ссылка на событие
+     * уходит в фан-аут после фиксации транзакции (`D-034`, `D-084`). Отдельный метод, чтобы
+     * публикация не осталась забытой на одном из путей записи: без неё сокет молчит,
+     * а журнал при этом полон.
+     */
+    private long record(
+            UUID gameId,
+            GameEventType type,
+            UUID actorUserId,
+            UUID chatId,
+            UUID characterId,
+            boolean onBehalfOfMaster,
+            Map<String, Object> payload) {
+        long seq = events.append(
+                gameId, type, actorUserId, chatId, characterId, onBehalfOfMaster, payloads.write(payload));
+        realtime.publishAfterCommit(gameId, seq);
+        return seq;
     }
 
     /**
@@ -1442,8 +1466,7 @@ public class GameMutationService {
             UUID chatId,
             UUID characterId,
             Map<String, Object> payload) {
-        long seq = events.append(
-                gameId, type, actorUserId, chatId, characterId, false, payloads.write(payload));
+        long seq = record(gameId, type, actorUserId, chatId, characterId, false, payload);
         projectSystem(gameId, type, chatId, seq);
     }
 
@@ -1470,7 +1493,7 @@ public class GameMutationService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public long appendEvent(UUID gameId, GameEventType type, UUID actorUserId, Map<String, Object> payload) {
-        return events.append(gameId, type, actorUserId, null, null, false, payloads.write(payload));
+        return record(gameId, type, actorUserId, null, null, false, payload);
     }
 
     /**
@@ -1487,8 +1510,7 @@ public class GameMutationService {
             UUID chatId,
             UUID characterId,
             boolean onBehalfOfMaster) {
-        return events.append(
-                gameId, type, actorUserId, chatId, characterId, onBehalfOfMaster, payloads.write(payload));
+        return record(gameId, type, actorUserId, chatId, characterId, onBehalfOfMaster, payload);
     }
 
     /**

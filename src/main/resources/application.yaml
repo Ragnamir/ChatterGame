@@ -12,3 +12,15 @@ spring:
 
 server:
   port: 8080
+
+chattergame:
+  realtime:
+    # Origin проверяется по списку (`D-073`): чужая страница в браузере пользователя иначе
+    # откроет сокет к серверу с его cookie. Прод-домен перечисляется здесь, в dev —
+    # адрес Vite-сервера.
+    allowed-origins:
+      - http://localhost:5173
+      - http://localhost:8080
+    # Сердцебиение: мёртвые сокеты высвобождаются по таймауту приложения, а не TCP (`D-083`).
+    heartbeat-interval: 20s
+    idle-timeout: 60s

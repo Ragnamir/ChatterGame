@@ -2,11 +2,27 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://chattergame.local/contract/events.schema.json",
   "title": "Игровое событие",
-  "description": "Конверт события реалтайма и журнала. На E01 зафиксированы тип сообщения, тип события и запрет на текст в мета-канале (D-031, D-035). На E03 перечисление расширено типами жизненного цикла игры и участия: до этого их не существовало, а любая мутация обязана оставлять событие (D-033, D-034, D-102). На E04 добавлены CHAT_CONTENT_CHANGED, CHAT_ARCHIVED, TRANSITION_ARCHIVED и TRANSITION_STATE_CHANGED; на E06 — CHARACTER_CREATED, CHARACTER_CONTENT_CHANGED и CHARACTER_ARCHIVED: архив выводит персонажа из игры, а не правит карточку (D-009). На E07 добавлены STORAGE_CREATED, STORAGE_CONTENT_CHANGED, STORAGE_ACCESS_CHANGED, ITEM_CREATED и ITEM_CONTENT_CHANGED: хранилище и предмет — сущности игры, и каждая их мутация оставляет событие (D-033). Открытие и закрытие хранилища — одно поле, поэтому один тип с признаком в payload, а не два типа (D-110).",
+  "description": "Конверт события реалтайма и журнала. На E01 зафиксированы тип сообщения, тип события и запрет на текст в мета-канале (D-031, D-035). На E03 перечисление расширено типами жизненного цикла игры и участия: до этого их не существовало, а любая мутация обязана оставлять событие (D-033, D-034, D-102). На E04 добавлены CHAT_CONTENT_CHANGED, CHAT_ARCHIVED, TRANSITION_ARCHIVED и TRANSITION_STATE_CHANGED; на E06 — CHARACTER_CREATED, CHARACTER_CONTENT_CHANGED и CHARACTER_ARCHIVED: архив выводит персонажа из игры, а не правит карточку (D-009). На E07 добавлены STORAGE_CREATED, STORAGE_CONTENT_CHANGED, STORAGE_ACCESS_CHANGED, ITEM_CREATED и ITEM_CONTENT_CHANGED: хранилище и предмет — сущности игры, и каждая их мутация оставляет событие (D-033). Открытие и закрытие хранилища — одно поле, поэтому один тип с признаком в payload, а не два типа (D-110). На E09 названы каналы сокета: игровой канал `GAME` несёт номер, вид строки и счётчик, канал открытого чата `CHAT` — тело; служебные каналы подтверждают подписку, resume, heartbeat и отказ (D-035, D-083).",
   "type": "object",
   "required": ["eventType", "gameId", "seq"],
   "additionalProperties": true,
   "properties": {
+    "channel": {
+      "type": "string",
+      "description": "Канал сокета (D-035): `GAME` — мета-событие, `CHAT` — тело открытого чата, остальные — служебные.",
+      "enum": [
+        "GAME",
+        "CHAT",
+        "READY",
+        "SUBSCRIBED",
+        "UNSUBSCRIBED",
+        "SUBSCRIPTION",
+        "RESUMED",
+        "ERROR",
+        "PONG",
+        "HEARTBEAT"
+      ]
+    },
     "eventType": {
       "type": "string",
       "enum": [
@@ -55,12 +71,45 @@
       "type": "string",
       "enum": ["SPEECH", "ACTION", "JOKE", "MASTER", "SYSTEM"]
     },
+    "kind": {
+      "type": "string",
+      "description": "Вид строки в мета-событии (D-035): `SYSTEM` — проекция журнала (D-031).",
+      "enum": ["SPEECH", "ACTION", "JOKE", "MASTER", "SYSTEM"]
+    },
     "gameId": { "type": "string", "format": "uuid" },
-    "seq": { "type": "integer", "minimum": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
     "chatId": { "type": ["string", "null"], "format": "uuid" },
     "characterId": { "type": ["string", "null"], "format": "uuid" },
+    "messageId": { "type": ["string", "null"], "format": "uuid" },
     "onBehalfOfMaster": { "type": "boolean" },
-    "payload": { "type": "object", "additionalProperties": true }
+    "hiddenAuthor": { "type": "boolean" },
+    "systemCode": { "type": ["string", "null"] },
+    "body": {
+      "type": ["string", "null"],
+      "description": "Тело сообщения. Приходит только в канале открытого чата (D-035)."
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "at": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object", "additionalProperties": true },
+    "unread": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Счётчик непрочитанного выводится из `inbox_entry` (D-036)."
+    },
+    "delivered": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Сколько строк вернул resume: повтор уже доставленного не считается (D-083)."
+    },
+    "lastSeq": { "type": "integer", "minimum": 0 },
+    "subjectKind": { "type": "string", "enum": ["CHARACTER", "MEMBERSHIP"] },
+    "subjectId": { "type": "string", "format": "uuid" },
+    "chatKind": { "type": "string" },
+    "status": { "type": "string" },
+    "reason": { "type": ["string", "null"] },
+    "code": { "type": "string" },
+    "message": { "type": "string" },
+    "userId": { "type": "string", "format": "uuid" }
   },
   "allOf": [
     {
@@ -76,6 +125,16 @@
             { "required": ["speakerName"] }
           ]
         }
+      }
+    },
+    {
+      "description": "Канал открытого чата несёт тело: без него подписка на чат не отличалась бы от подписки на мета-события (D-035).",
+      "if": {
+        "properties": { "channel": { "const": "CHAT" } },
+        "required": ["channel"]
+      },
+      "then": {
+        "required": ["body", "chatId", "seq"]
       }
     }
   ]

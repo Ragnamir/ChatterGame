@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -159,6 +160,58 @@ public class MessageRepository {
         Long seq = jdbc.queryForObject(
                 "SELECT max(event_seq) FROM inbox_entry WHERE chat_id = ?", Long.class, chatId);
         return seq == null ? 0L : seq;
+    }
+
+    /**
+     * Resume (`D-083`): недостающее по всем подпискам одним запросом. Условие «чат и его
+     * субъект» склеивается через `OR`, а не выполняется циклом по чатам: иначе телефон,
+     * рвущий соединение десятки раз за вечер, платил бы N+1 запросом на каждое
+     * переподключение. Строка берётся из `inbox_entry` (`D-030`), как и везде в чтении.
+     */
+    public List<FeedRow> feedForResume(
+            UUID gameId, List<ChatSubscription> subscriptions, long afterSeq, int limit) {
+        if (subscriptions.isEmpty()) {
+            return List.of();
+        }
+        StringBuilder where = new StringBuilder();
+        List<Object> args = new ArrayList<>();
+        args.add(gameId);
+        args.add(afterSeq);
+        for (ChatSubscription subscription : subscriptions) {
+            if (!where.isEmpty()) {
+                where.append(" OR ");
+            }
+            where.append("(i.chat_id = ? AND i.subject_kind = ? AND i.subject_id = ?)");
+            args.add(subscription.chatId());
+            args.add(subscription.subject().kind().name());
+            args.add(subscription.subject().id());
+        }
+        args.add(limit);
+        return jdbc.query(
+                "SELECT i.event_seq, i.chat_id, m.id AS message_id, m.kind AS message_kind, "
+                        + "m.character_id, m.author_membership_id, m.author_user_id, "
+                        + "m.on_behalf_of_master, m.body, m.payload AS message_payload, "
+                        + "e.type AS event_type, e.payload AS event_payload, "
+                        + "coalesce(m.created_at, e.created_at) AS created_at "
+                        + "FROM inbox_entry i "
+                        + "JOIN game_event e ON e.game_id = ? AND e.seq = i.event_seq "
+                        + "LEFT JOIN message m ON m.id = i.message_id "
+                        + "WHERE i.event_seq > ? AND (" + where + ") "
+                        + "ORDER BY i.event_seq LIMIT ?",
+                (rs, rowNum) -> new FeedRow(mapFeed(rs), rs.getString("event_type")),
+                args.toArray());
+    }
+
+    /** Подписка сокета на чат: чат и субъект, чьими глазами он смотрит (`D-086`). */
+    public record ChatSubscription(UUID chatId, InboxSubject subject) {
+    }
+
+    /**
+     * Строка resume вместе с типом события журнала. Тип нужен мета-каналу: клиент по нему
+     * отличает реплику от события мира, а `FeedItem` его не несёт — он описывает ленту,
+     * где порядок общий и вид строки уже сведён к `kind`.
+     */
+    public record FeedRow(FeedItem item, String eventType) {
     }
 
     private Message map(ResultSet rs, int rowNum) throws SQLException {
