@@ -36,6 +36,8 @@ import com.chattergame.restriction.Restriction;
 import com.chattergame.restriction.RestrictionKind;
 import com.chattergame.restriction.RestrictionRepository;
 import com.chattergame.media.AssetService;
+import com.chattergame.turn.Turn;
+import com.chattergame.turn.TurnRepository;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
 import org.springframework.stereotype.Service;
@@ -81,6 +83,7 @@ public class GameMutationService {
     private final InboxMaterializer inbox;
     private final RestrictionRepository restrictions;
     private final RealtimeEvents realtime;
+    private final TurnRepository turns;
 
     public GameMutationService(
             GameRepository games,
@@ -99,7 +102,8 @@ public class GameMutationService {
             AssetService assetService,
             InboxMaterializer inbox,
             RestrictionRepository restrictions,
-            RealtimeEvents realtime) {
+            RealtimeEvents realtime,
+            TurnRepository turns) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
@@ -117,6 +121,7 @@ public class GameMutationService {
         this.inbox = inbox;
         this.restrictions = restrictions;
         this.realtime = realtime;
+        this.turns = turns;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -182,6 +187,86 @@ public class GameMutationService {
         event(gameId, GameEventType.GAME_CONTENT_CHANGED, actorUserId,
                 payload("visibility", visibility.name()));
         return requireGame(gameId);
+    }
+
+    // --- Пошаговый режим --------------------------------------------------------------
+
+    /**
+     * Переключатель пошагового режима (`D-012`). Флаг, а не фаза: включается и выключается
+     * посреди партии, и уже записанные сообщения от этого не меняются — ни одна строка
+     * `message` и ни одно событие не переписываются, поэтому у отправленного раньше
+     * остаётся тот же `budgetConsumed`.
+     *
+     * <p>Открытый ход переключение не трогает: сгорание несовершённого происходит при
+     * явной смене хода, а не при снятии флага (`D-012`). Выключенный флаг просто снимает
+     * и блокировку, и расход: ход остаётся в журнале и в таблице как история.
+     */
+    @Transactional
+    public Game setTurnBased(UUID actorUserId, UUID gameId, boolean turnBased) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(
+                game, "turn_based_after_finish", "После завершения игры пошаговый режим не меняется");
+
+        games.updateTurnBased(gameId, turnBased);
+        event(gameId, GameEventType.GAME_CONTENT_CHANGED, actorUserId,
+                payload("turnBased", turnBased));
+        return requireGame(gameId);
+    }
+
+    /**
+     * Открытие хода (`REQUIREMENTS §14`): мастер открывает ход всем сразу, поэтому
+     * открытый ход в игре один. Повторное открытие при открытом ходе отклоняется с
+     * машинным кодом, а не «закрывает и открывает следующий»: смена хода — это закрытие,
+     * и она обязана быть видна в журнале как отдельное действие мастера.
+     */
+    @Transactional
+    public Turn openTurn(UUID actorUserId, UUID gameId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "turn_after_finish", "После завершения игры ход не меняется");
+        requireTurnBased(game);
+
+        // Блокировка игры, а не строк хода: у первой смены хода строк ещё нет.
+        games.lockById(gameId);
+        if (turns.findOpen(gameId).isPresent()) {
+            throw ApiException.conflict(
+                    "turn_already_open", "Ход уже открыт: сначала закройте текущий");
+        }
+
+        long n = turns.maxNumber(gameId) + 1L;
+        UUID turnId = Uuids.v7();
+        turns.openTurn(turnId, gameId, n);
+        event(gameId, GameEventType.TURN_OPENED, actorUserId, payload("n", n));
+        // Возвращается прочитанная строка, а не собранная в памяти: момент открытия ставит
+        // база, и клиент обязан увидеть её значение, а не своё представление о нём.
+        return turns.findLatest(gameId).orElseThrow(() -> new IllegalStateException(
+                "Ход не читается сразу после открытия: " + turnId));
+    }
+
+    /**
+     * Закрытие хода. Несовершённые действия сгорают здесь: строки бюджета остаются
+     * привязанными к закрытому ходу, поэтому следующий ход начинается с чистых флагов
+     * и прошлое не «дотягивается» до игрока через ход (`D-012`).
+     */
+    @Transactional
+    public Turn closeTurn(UUID actorUserId, UUID gameId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "turn_after_finish", "После завершения игры ход не меняется");
+
+        games.lockById(gameId);
+        Turn open = turns.findOpen(gameId)
+                .orElseThrow(() -> ApiException.conflict("turn_not_open", "Открытого хода нет"));
+        turns.close(open.id(), actorUserId);
+        event(gameId, GameEventType.TURN_CLOSED, actorUserId, payload("n", open.n()));
+        // Момент закрытия и автор берутся из строки: часы ставит база, а не приложение.
+        return turns.findLatest(gameId).orElseThrow(() -> new IllegalStateException(
+                "Ход не читается сразу после закрытия: " + open.id()));
+    }
+
+    private static void requireTurnBased(Game game) {
+        if (!game.turnBased()) {
+            throw ApiException.conflict(
+                    "turn_based_off", "Пошаговый режим выключен: ход открывать нечего");
+        }
     }
 
     // --- Переходы состояния -----------------------------------------------------------

@@ -98,6 +98,36 @@ public class GameRepository {
                 id);
     }
 
+    /**
+     * Флаг пошагового режима (`D-012`). Пишется отдельно от осей состояния: в отличие от
+     * `updateState` он не трогает готовность, видимость и фазу, и перевод игры в пошаговый
+     * режим посреди партии не является переходом состояния.
+     */
+    public void updateTurnBased(UUID id, boolean turnBased) {
+        jdbc.update(
+                "UPDATE game SET turn_based = ?, updated_at = now() WHERE id = ?", turnBased, id);
+    }
+
+    /**
+     * Строка игры под исключительной блокировкой. Мутация, которой нужен «один мастер
+     * за раз» и которой не за что зацепиться в доменных таблицах, сериализуется на самой
+     * игре: у новой игры строк хода ещё нет, и `FOR UPDATE` по ним не запер бы ничего.
+     */
+    public void lockById(UUID id) {
+        jdbc.queryForList("SELECT id FROM game WHERE id = ? FOR UPDATE", UUID.class, id);
+    }
+
+    /**
+     * Строка игры под разделяемой блокировкой ключа. Это ровно та блокировка, которую
+     * берёт внешний ключ `game_event.game_id` при вставке события. Взятая до блокировки
+     * хода, она задаёт единый порядок «игра, затем ход» со всеми мутациями мастера
+     * (`lockById`) и снимает взаимную блокировку с закрытием хода: иначе запись сообщения
+     * держала бы ход и ждала игру, а закрытие держало бы игру и ждало ход.
+     */
+    public void lockByIdForShare(UUID id) {
+        jdbc.queryForList("SELECT id FROM game WHERE id = ? FOR KEY SHARE", UUID.class, id);
+    }
+
     public void markArchived(UUID id, String reason) {
         jdbc.update(
                 "UPDATE game SET archived = true, archived_reason = ?, updated_at = now() WHERE id = ?",

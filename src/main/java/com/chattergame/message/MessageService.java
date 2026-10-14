@@ -14,6 +14,7 @@ import com.chattergame.game.Membership;
 import com.chattergame.game.MembershipRepository;
 import com.chattergame.journal.GameEventType;
 import com.chattergame.journal.Payloads;
+import com.chattergame.turn.TurnService;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
 import org.springframework.stereotype.Service;
@@ -49,6 +50,7 @@ public class MessageService {
     private final CharacterRepository characters;
     private final PresenceRepository presence;
     private final Payloads payloads;
+    private final TurnService turns;
 
     public MessageService(
             MessageRepository messages,
@@ -61,7 +63,8 @@ public class MessageService {
             ChatRepository chats,
             CharacterRepository characters,
             PresenceRepository presence,
-            Payloads payloads) {
+            Payloads payloads,
+            TurnService turns) {
         this.messages = messages;
         this.cursors = cursors;
         this.postings = postings;
@@ -73,6 +76,7 @@ public class MessageService {
         this.characters = characters;
         this.presence = presence;
         this.payloads = payloads;
+        this.turns = turns;
     }
 
     /**
@@ -95,6 +99,11 @@ public class MessageService {
         Chat chat = requireChat(gameId, chatId);
         MessageAccess.assertBodyLength(body);
         MessageAccess.assertCanPost(postings.posting(userId, gameId, chatId, characterId), kind);
+        // Ход тратится до эффекта: отклонение по лимиту не должно оставлять сообщение.
+        boolean budgetConsumed = consumesBudget(kind, chat, characterId);
+        if (budgetConsumed) {
+            turns.charge(gameId, characterId, kind);
+        }
 
         Game game = games.findById(gameId).orElseThrow();
         boolean hidden = hiddenAuthor(characterId);
@@ -105,9 +114,8 @@ public class MessageService {
         if (onBehalfOfMaster) {
             payload.put("onBehalfOfMaster", true);
         }
-        // Бюджет хода — пока только поле события (механика — E10, PLAN E08 п. 7).
         if (kind == MessageKind.SPEECH || kind == MessageKind.ACTION) {
-            payload.put("budgetConsumed", !isMasterDm(chat) && characterId != null);
+            payload.put("budgetConsumed", budgetConsumed);
         }
 
         Message message = new Message(
@@ -260,6 +268,19 @@ public class MessageService {
 
     private static boolean isMasterDm(Chat chat) {
         return chat.kind() == ChatKind.MASTER_DM;
+    }
+
+    /**
+     * Тратит ли сообщение лимит хода (`REQUIREMENTS §11`, таблица «Бюджет хода»). Предикат
+     * один для двух дел сразу — записи флага в событие и списания: разойдись они, событие
+     * говорило бы «израсходовано» там, где лимит не тронут, и наоборот. `JOKE`, `MASTER`
+     * и `SYSTEM` не тратят, личный чат с мастером — тоже (`D-013`); сообщение мастера от
+     * лица персонажа тратит, потому что персонаж в нём и говорит (`D-005`).
+     */
+    private static boolean consumesBudget(MessageKind kind, Chat chat, UUID characterId) {
+        return (kind == MessageKind.SPEECH || kind == MessageKind.ACTION)
+                && !isMasterDm(chat)
+                && characterId != null;
     }
 
     private Chat requireChat(UUID gameId, UUID chatId) {

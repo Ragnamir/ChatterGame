@@ -275,6 +275,85 @@ case "$stage" in
       echo "FAIL: E08 требует эндпоинты сообщений, ленты и ограничений"
     fi
     ;;
+  E10)
+    # Время — единственная механика этапа (`D-011`) и единственная, у которой есть
+    # выключенное состояние: проверки адресные, потому что соблазн «закрыть ход по
+    # таймауту» ломает именно то свойство, ради которого этап назван (`D-060`).
+    timers=$(grep -rlE '@Scheduled|ScheduledExecutorService|java\.util\.Timer' \
+      src/main/java/com/chattergame/turn 2>/dev/null || true)
+    if [ -n "$timers" ]; then
+      fail=1
+      echo "FAIL: E10 — таймеров в ходе нет: ход не закрывается сам (D-060):"
+      echo "$timers"
+    else
+      echo "  ok: E10 — ход не закрывается по времени"
+    fi
+    # Решение по времени обязано отсутствовать и как вычисление, а не только как таймер.
+    if grep -rqE 'isBefore\(|isAfter\(|expires' src/main/java/com/chattergame/turn 2>/dev/null; then
+      fail=1
+      echo "FAIL: E10 — по времени не вычисляется ничего, включая «ожидание мастера» (D-060)"
+    fi
+    # Лимит суммарный по чатам (`D-013`): проверка «не потрачено» и запись «потрачено»
+    # под одной блокировкой строки бюджета, иначе два чата дают двойной лимит.
+    if grep -rq 'FOR UPDATE' src/main/java/com/chattergame/turn/TurnRepository.java; then
+      echo "  ok: E10 — бюджет хода берётся с блокировкой строки (D-013)"
+    else
+      fail=1
+      echo "FAIL: E10 требует SELECT ... FOR UPDATE на бюджете хода (D-013)"
+    fi
+    # Открытый ход читается под разделяемой блокировкой: закрытие и параллельная запись
+    # не должны пересечься, иначе сообщение попало бы в уже закрытый ход.
+    if grep -rq 'FOR SHARE' src/main/java/com/chattergame/turn/TurnRepository.java; then
+      echo "  ok: E10 — открытый ход читается под разделяемой блокировкой"
+    else
+      fail=1
+      echo "FAIL: E10 требует FOR SHARE на открытом ходе"
+    fi
+    # Смена хода — мутация мира: событие, а не тихий UPDATE (D-033, D-034).
+    if grep -rq 'TURN_OPENED' src/main/java/com/chattergame/game/GameMutationService.java \
+      && grep -rq 'TURN_CLOSED' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E10 — открытие и закрытие хода пишут события"
+    else
+      fail=1
+      echo "FAIL: E10 требует TURN_OPENED/TURN_CLOSED в GameMutationService (D-033)"
+    fi
+    # Расход живёт в пути записи сообщения: отдельный маршрут обходился бы прямой записью.
+    if grep -rq 'TurnService' src/main/java/com/chattergame/message/MessageService.java; then
+      echo "  ok: E10 — путь записи сообщения расходует бюджет"
+    else
+      fail=1
+      echo "FAIL: E10 требует расхода бюджета в пути записи сообщения (PLAN E10, п. 4–6)"
+    fi
+    # Личный чат с мастером исключён из бюджета (`D-013`): без этой клетки лимит
+    # расползается на канал, который планом прямо исключён.
+    if grep -rq 'MASTER_DM' src/main/java/com/chattergame/message/MessageService.java; then
+      echo "  ok: E10 — личный чат с мастером исключён из бюджета (D-013)"
+    else
+      fail=1
+      echo "FAIL: E10 требует исключения MASTER_DM из бюджета хода (D-013)"
+    fi
+    # Отдельной миграции этап не несёт: `turn` и `turn_budget` объявлены в baseline
+    # вместе с индексами (прецедент `D-103`). Вторая запись была бы второй правдой.
+    if grep -rq 'tableName: turn' src/main/resources/db/changelog/changes/001-baseline.yaml; then
+      echo "  ok: E10 — таблицы хода объявлены в baseline"
+    else
+      fail=1
+      echo "FAIL: E10 требует turn/turn_budget в 001-baseline.yaml"
+    fi
+    if ls src/main/resources/db/changelog/changes/*-e10.yaml >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E10 — схема хода уже в baseline, новой миграции быть не должно"
+    else
+      echo "  ok: E10 — новой миграции нет"
+    fi
+    # Веб-слой счётчика: чтение, открытие и закрытие.
+    if grep -rqE '@RestController' src/main/java/com/chattergame/web/game/TurnController.java; then
+      echo "  ok: E10 — веб-слой счётчика хода на месте"
+    else
+      fail=1
+      echo "FAIL: E10 требует эндпоинты счётчика, открытия и закрытия хода"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

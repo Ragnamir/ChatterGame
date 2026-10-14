@@ -99,6 +99,9 @@ public class GameController {
         if (request.visibility() != null) {
             game = mutations.changeVisibility(auth.user().id(), id, parseVisibility(request.visibility()));
         }
+        if (request.turnBased() != null) {
+            game = mutations.setTurnBased(auth.user().id(), id, request.turnBased());
+        }
         return GameView.of(game);
     }
 

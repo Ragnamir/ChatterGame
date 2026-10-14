@@ -168,6 +168,82 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/turn:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Счётчик хода
+      description: |
+        Состояние пошагового режима (`REQUIREMENTS §14`): открыт ли ход, его номер и расход
+        лимитов. «Ожидание мастера» — это `open: false`, а не вычисление по времени:
+        таймаута в проекте нет (`D-060`). Расход виден мастеру целиком, игроку — только по
+        его персонажам, наблюдателю — ничей (`D-063`).
+      operationId: getTurn
+      tags: [turn]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Счётчик хода
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Turn' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/turn/open:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Открытие хода мастером
+      description: |
+        Мастер открывает ход всем сразу (`D-012`), поэтому открытый ход в игре один:
+        повторное открытие при открытом ходе — `409 turn_already_open`. Требует включённого
+        флага `turnBased` и незавершённой игры.
+      operationId: openTurn
+      tags: [turn]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Счётчик хода после открытия
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Turn' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Ход уже открыт, режим выключен или игра завершена
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /games/{id}/turn/close:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Закрытие хода мастером
+      description: |
+        Закрытие сжигает несовершённое: следующий ход начинается с чистых лимитов (`D-012`).
+        Смена хода — это закрытие и открытие, видимые в журнале двумя записями (`D-033`).
+      operationId: closeTurn
+      tags: [turn]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Счётчик хода после закрытия
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Turn' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Открытого хода нет или игра завершена
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
   /games/{id}/events:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -310,7 +386,7 @@ paths:
       - $ref: '#/components/parameters/ChatId'
     post:
       summary: Архивирование локации с причиной
-      description: Идемпотентно: повторный вызов не пишет второе событие.
+      description: 'Идемпотентно: повторный вызов не пишет второе событие.'
       operationId: archiveLocation
       tags: [chat]
       security:
@@ -1766,6 +1842,29 @@ components:
         readOnly: { type: boolean }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    Turn:
+      type: object
+      description: |
+        Счётчик хода (`REQUIREMENTS §14`). `n` — номер последнего хода, `0` если ход не
+        открывали. `open` — открыт ли он сейчас; отдельного признака «ожидание мастера»
+        нет, потому что по времени ничего не вычисляется (`D-060`). `budgets` сужены под
+        смотрящего: мастер видит всех, игрок — своих персонажей, наблюдатель — никого.
+      required: [turnBased, open, n, budgets]
+      properties:
+        turnBased: { type: boolean, description: Флаг пошагового режима (`D-012`) }
+        open: { type: boolean }
+        n: { type: integer, format: int64, minimum: 0 }
+        openedAt: { type: [string, 'null'], format: date-time }
+        closedAt: { type: [string, 'null'], format: date-time }
+        budgets:
+          type: array
+          items:
+            type: object
+            required: [characterId, actionUsed, speechUsed]
+            properties:
+              characterId: { type: string, format: uuid }
+              actionUsed: { type: boolean }
+              speechUsed: { type: boolean }
     CreateGameRequest:
       type: object
       required: [title]
@@ -1781,6 +1880,7 @@ components:
         publicDescription: { type: [string, 'null'] }
         privateDescription: { type: [string, 'null'] }
         visibility: { type: [string, 'null'], enum: [PRIVATE, PUBLIC, 'null'] }
+        turnBased: { type: [boolean, 'null'], description: Пошаговый режим (`D-012`) }
     TransitionRequest:
       type: object
       required: [transition]
