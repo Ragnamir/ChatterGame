@@ -23,5 +23,14 @@ public enum ChatKind {
     WHISPER,
 
     /** Чат финального обсуждения (`REQUIREMENTS §7.5`). */
-    FINAL
+    FINAL;
+
+    /**
+     * Закрытый канал: участие в нём хранится в `chat_member`, а не в присутствии
+     * (`REQUIREMENTS §7.2`–§7.4, `D-123`). Финальное обсуждение сюда не попадает: у него
+     * тоже есть список участников, но это чат всей игры, а не круг приглашённых.
+     */
+    public boolean privateChannel() {
+        return this == RADIO || this == WHISPER || this == MASTER_DM;
+    }
 }

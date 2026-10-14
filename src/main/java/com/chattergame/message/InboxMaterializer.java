@@ -2,7 +2,8 @@ package com.chattergame.message;
 
 import com.chattergame.chat.Chat;
 import com.chattergame.chat.ChatKind;
-import com.chattergame.chat.ChatKind;
+import com.chattergame.chat.ChatMember;
+import com.chattergame.chat.ChatMemberRepository;
 import com.chattergame.chat.ChatRepository;
 import com.chattergame.character.Character;
 import com.chattergame.character.CharacterRepository;
@@ -44,6 +45,7 @@ public class InboxMaterializer {
     private final CharacterRepository characters;
     private final GameRepository games;
     private final ChatRepository chats;
+    private final ChatMemberRepository channelMembers;
 
     public InboxMaterializer(
             InboxRepository inbox,
@@ -51,13 +53,15 @@ public class InboxMaterializer {
             MembershipRepository memberships,
             CharacterRepository characters,
             GameRepository games,
-            ChatRepository chats) {
+            ChatRepository chats,
+            ChatMemberRepository channelMembers) {
         this.inbox = inbox;
         this.presence = presence;
         this.memberships = memberships;
         this.characters = characters;
         this.games = games;
         this.chats = chats;
+        this.channelMembers = channelMembers;
     }
 
     /**
@@ -95,7 +99,7 @@ public class InboxMaterializer {
             subjects.addAll(masterOnly(game));
         }
         if (visibleTo(Viewer.PRESENT_CHARACTER, kind, hiddenAuthor)) {
-            subjects.addAll(presentInChat(game, chatId, addressOccupants));
+            subjects.addAll(participants(game, chat, chatId, addressOccupants));
         }
         if (visibleTo(Viewer.OBSERVER, kind, hiddenAuthor)) {
             subjects.addAll(observers(game));
@@ -123,10 +127,44 @@ public class InboxMaterializer {
             subjects.addAll(masterOnly(game));
         }
         if (visibleTo(Viewer.PRESENT_CHARACTER, kind, false)) {
-            subjects.addAll(presentInChat(game, chatId, addressOccupants));
+            subjects.addAll(participants(game, chat, chatId, addressOccupants));
         }
         if (visibleTo(Viewer.OBSERVER, kind, false)) {
             subjects.addAll(observers(game));
+        }
+        return subjects;
+    }
+
+    /**
+     * Кто «внутри» чата (`REQUIREMENTS §7.1`–§7.5). Для локации это присутствие, для
+     * радиочата, шёпота, личного чата и финального обсуждения — участие в `chat_member`
+     * (`D-123`): у локации участник — тот, кто стоит в ней, у закрытого канала — тот, кого
+     * в него позвали, и это разные состояния, которые нельзя выразить одним.
+     */
+    private LinkedHashSet<InboxSubject> participants(
+            Game game, Chat chat, UUID chatId, boolean addressOccupants) {
+        if (chat != null && chat.kind() != ChatKind.LOCATION) {
+            return channelParticipants(game, chatId, addressOccupants);
+        }
+        return presentInChat(game, chatId, addressOccupants);
+    }
+
+    /** Участники закрытого канала: их держит `chat_member`, а не присутствие в локации. */
+    private LinkedHashSet<InboxSubject> channelParticipants(
+            Game game, UUID chatId, boolean addressOccupants) {
+        LinkedHashSet<InboxSubject> subjects = new LinkedHashSet<>();
+        Map<UUID, Character> occupied = characters.findByGame(game.id()).stream()
+                .filter(character -> character.occupantMembershipId() != null)
+                .collect(Collectors.toMap(
+                        Character::id, Function.identity(), (first, second) -> first));
+        for (ChatMember member : channelMembers.findJoinedByChat(chatId)) {
+            subjects.add(member.subject());
+            if (addressOccupants && member.subject().kind() == SubjectKind.CHARACTER) {
+                Character character = occupied.get(member.subject().id());
+                if (character != null) {
+                    subjects.add(InboxSubject.membership(character.occupantMembershipId()));
+                }
+            }
         }
         return subjects;
     }

@@ -1345,6 +1345,238 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Закрытые каналы игры глазами смотрящего
+      description: |
+        Радиочаты, шёпоты, личные чаты с мастером и чат финального обсуждения (`E11`).
+        Локации здесь не перечисляются: они живут в графе (`E04`). Наблюдателю каналы не
+        показываются (`D-063`); мастеру — все, кроме чужих личных чатов, где он не участник
+        (`D-037`). Счётчик непрочитанного считается по `inbox_entry` (`D-036`).
+      operationId: listChannels
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Список каналов
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/channels/{chatId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    get:
+      summary: Канал и состав его участников
+      description: |
+        Участники идут с состоянием: `INVITED` — приглашение, на которое ещё нужно ответить
+        (`D-038`); `JOINED` — внутри. Невидимый канал отдаётся как `403 not_a_chat_member`,
+        а не `404`: чужой канал существует, но не этому смотрящему.
+      operationId: readChannel
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Канал глазами смотрящего
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/radios:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание радиочата мастером
+      description: |
+        Радио связывает фиксированный список персонажей и не требует общей локации
+        (`D-039`). Говорить в нём можно только речью: `ACTION` и `JOKE` отклоняются с
+        `radio_speech_only`. Событие — `CHAT_CREATED`.
+      operationId: createRadio
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RadioRequest' }
+      responses:
+        '201':
+          description: Радиочат создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/whispers:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Создание шёпота
+      description: |
+        Многосторонний приватный разговор (`D-038`, `D-097`). Условия проверяются в момент
+        приглашения и отклоняются разными кодами: одна локация (`whisper_same_location`),
+        одинаковая скрытность (`whisper_same_stealth`), разрешение говорить
+        (`whisper_speech_restricted`). Нужны минимум два персонажа разных игроков
+        (`whisper_players`). Инициатор входит сразу, остальные получают `INVITED`; мастер
+        состоит по умолчанию. События — `CHAT_CREATED` и `CHAT_MEMBER_INVITED`.
+      operationId: createWhisper
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WhisperRequest' }
+      responses:
+        '201':
+          description: Шёпот создан, часть участников приглашена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels/{chatId}/members:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    put:
+      summary: Замена состава радиочата
+      description: |
+        `PUT` задаёт итоговый круг, поэтому повтор с тем же телом ничего не меняет. Убранные
+        получают `CHAT_MEMBER_LEFT`, добавленные — `CHAT_MEMBER_JOINED` (`D-010`).
+      operationId: setRadioMembers
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RadioMembersRequest' }
+      responses:
+        '200':
+          description: Состав обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels/{chatId}/disabled:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    put:
+      summary: Отключение и включение радиочата
+      description: |
+        Отключённый радиочат не принимает сообщения (`409 chat_disabled`), но остаётся
+        читаемым: история связи — часть игры (`D-039`). Событие — `CHAT_ACCESS_CHANGED`.
+      operationId: setRadioDisabled
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RadioDisabledRequest' }
+      responses:
+        '200':
+          description: Состояние радиочата
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels/{chatId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Согласие на участие в шёпоте
+      description: Приглашение становится участием; событие — `CHAT_MEMBER_JOINED` (`D-038`).
+      operationId: acceptWhisper
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Участие подтверждено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels/{chatId}/decline:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Отказ от приглашения в шёпот
+      description: 'Состояние `DECLINED` вместо тишины: приглашающий обязан видеть ответ. Событие — `CHAT_MEMBER_DECLINED`.'
+      operationId: declineWhisper
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Приглашение отклонено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/channels/{chatId}/close:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      summary: Закрытие шёпота
+      description: |
+        Закрыть может участник или мастер (`D-038`). Участия закрываются, чат архивируется:
+        история остаётся читаемой (`D-010`). Событие — `CHAT_ARCHIVED`.
+      operationId: closeWhisper
+      tags: [chat]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Шёпот закрыт
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Channel' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/assets:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -2316,3 +2548,59 @@ components:
         createdAt: { type: string, format: date-time }
         expiresAt: { type: [string, 'null'], format: date-time }
         revokedAt: { type: [string, 'null'], format: date-time, description: 'Снятие — не удаление (`D-010`)' }
+
+    Channel:
+      type: object
+      required: [id, gameId, kind, title, disabled, archived, createdAt, master, unread, members]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        kind: { type: string, enum: [RADIO, WHISPER, MASTER_DM, FINAL] }
+        title: { type: string }
+        disabled: { type: boolean, description: 'Отключённый радиочат читается, но не принимает запись (D-039)' }
+        archived: { type: boolean }
+        archivedReason: { type: [string, 'null'] }
+        archivedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        mySubjectKind: { type: [string, 'null'], enum: [CHARACTER, MEMBERSHIP, null], description: 'Кем смотрящий состоит в канале; пусто у мастера, который в канал не входил (D-086)' }
+        myState: { type: [string, 'null'], enum: [INVITED, JOINED, DECLINED, LEFT, null] }
+        master: { type: boolean, description: 'Смотрит мастер: он видит канал, даже если не состоит в нём' }
+        unread: { type: integer, format: int64, description: 'Считается по inbox_entry (D-036)' }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/ChannelMember' }
+    ChannelMember:
+      type: object
+      required: [subjectKind, subjectId, state]
+      properties:
+        subjectKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        subjectId: { type: string, format: uuid }
+        state: { type: string, enum: [INVITED, JOINED, DECLINED, LEFT], description: 'Приглашение и согласие — разные состояния (D-038)' }
+    RadioRequest:
+      type: object
+      required: [title, characterIds]
+      properties:
+        title: { type: string, maxLength: 200 }
+        characterIds:
+          type: array
+          items: { type: string, format: uuid }
+    RadioMembersRequest:
+      type: object
+      required: [characterIds]
+      properties:
+        characterIds:
+          type: array
+          items: { type: string, format: uuid }
+    RadioDisabledRequest:
+      type: object
+      required: [disabled]
+      properties:
+        disabled: { type: boolean }
+    WhisperRequest:
+      type: object
+      required: [characterIds]
+      properties:
+        characterIds:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }

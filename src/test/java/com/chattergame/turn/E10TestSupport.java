@@ -52,6 +52,7 @@ abstract class E10TestSupport extends E02TestSupport {
         final Character character;
         final UUID playerUserId;
         final UUID playerMembershipId;
+        final UUID masterMembershipId;
         final String playerToken;
 
         private Fixture(
@@ -61,6 +62,7 @@ abstract class E10TestSupport extends E02TestSupport {
                 Character character,
                 UUID playerUserId,
                 UUID playerMembershipId,
+                UUID masterMembershipId,
                 String playerToken) {
             this.gameId = gameId;
             this.masterUserId = masterUserId;
@@ -68,6 +70,7 @@ abstract class E10TestSupport extends E02TestSupport {
             this.character = character;
             this.playerUserId = playerUserId;
             this.playerMembershipId = playerMembershipId;
+            this.masterMembershipId = masterMembershipId;
             this.playerToken = playerToken;
         }
 
@@ -76,32 +79,41 @@ abstract class E10TestSupport extends E02TestSupport {
             return mutations.createLocation(masterUserId, gameId, title, null).id();
         }
 
-        /** Чат другого вида. Радио и шёпот заводит `E11`, здесь нужен просто второй чат. */
-        UUID chatOfKind(String kind, String title) {
+        /**
+         * Чат другого вида с готовым составом. Каналы заводит `E11`, здесь нужен просто
+         * второй чат, в котором персонаж состоит: без строки `chat_member` запись в
+         * закрытый канал отклоняется как чужая (`D-123`), и проверялся бы не расход.
+         */
+        UUID channelOfKind(String kind, String title, UUID... characterIds) {
             UUID chatId = UUID.randomUUID();
             jdbc.update(
                     "INSERT INTO chat (id, game_id, kind, title) VALUES (?, ?, ?, ?)",
                     chatId, gameId, kind, title);
+            for (UUID characterId : characterIds) {
+                jdbc.update(
+                        "INSERT INTO chat_member (id, chat_id, subject_kind, subject_id, state, "
+                                + "created_at, joined_at) VALUES (?, ?, 'CHARACTER', ?, 'JOINED', now(), now())",
+                        UUID.randomUUID(), chatId, characterId);
+            }
+            return chatId;
+        }
+
+        /** Личный чат с мастером глазами игрока: обе стороны участия, как их заводит `E11`. */
+        UUID masterDm() {
+            UUID chatId = channelOfKind("MASTER_DM", "Мастер");
+            jdbc.update(
+                    "INSERT INTO chat_member (id, chat_id, subject_kind, subject_id, state, "
+                            + "created_at, joined_at) VALUES (?, ?, 'MEMBERSHIP', ?, 'JOINED', now(), now())",
+                    UUID.randomUUID(), chatId, playerMembershipId);
+            jdbc.update(
+                    "INSERT INTO chat_member (id, chat_id, subject_kind, subject_id, state, "
+                            + "created_at, joined_at) VALUES (?, ?, 'MEMBERSHIP', ?, 'JOINED', now(), now())",
+                    UUID.randomUUID(), chatId, masterMembershipId);
             return chatId;
         }
 
         void place(UUID characterId, UUID chatId) {
             mutations.placeCharacter(masterUserId, gameId, characterId, chatId);
-        }
-
-        /**
-         * Присутствие в чате, который не локация. Радиочат и личный чат заводит `E11`,
-         * а присутствие в них через перемещение недоступно: `placeCharacter` принимает
-         * только локацию. Прямая запись в `presence` — та же обвязка, что занятие на
-         * `E06`–`E08`: правило принадлежит другому этапу, а здесь проверяется расход.
-         */
-        void presenceIn(UUID chatId) {
-            jdbc.update("UPDATE presence SET left_at = now() WHERE character_id = ? AND left_at IS NULL",
-                    character.id());
-            jdbc.update(
-                    "INSERT INTO presence (id, character_id, chat_id, hidden, joined_at) "
-                            + "VALUES (?, ?, ?, false, now())",
-                    UUID.randomUUID(), character.id(), chatId);
         }
 
         Turn openTurn() {
@@ -156,6 +168,10 @@ abstract class E10TestSupport extends E02TestSupport {
             mutations.setTurnBased(masterUserId, game.id(), true);
         }
 
+        UUID masterMembershipId = jdbc.queryForObject(
+                "SELECT id FROM membership WHERE game_id = ? AND user_id = ?",
+                UUID.class, game.id(), masterUserId);
+
         return new Fixture(
                 game.id(),
                 masterUserId,
@@ -163,6 +179,7 @@ abstract class E10TestSupport extends E02TestSupport {
                 character,
                 playerUserId,
                 membershipId,
+                masterMembershipId,
                 loginAndGetToken(playerLogin, OTHER_PASSWORD));
     }
 

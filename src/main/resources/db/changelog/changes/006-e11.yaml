@@ -1,0 +1,69 @@
+databaseChangeLog:
+  # E11: личный чат с мастером, шёпот, радиочаты, чат финального обсуждения.
+  # Применённые `001-baseline.yaml` … `005-e08.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Единственная новая таблица — `chat_member`: участник чата, который не является локацией.
+  # Локация обходится `presence` (`REQUIREMENTS §7.1`): персонаж стоит в ней или нет, и это
+  # ровно то, что хранит присутствие. Радиочат и шёпот так хранить нельзя по двум причинам,
+  # и обе — про суть, а не про удобство:
+  #
+  # 1. Присутствие активно ровно одно на персонажа (`ux_presence_active_character`,
+  #    `003-e06.yaml`): персонаж стоит в локации, и вторая активная строка запрещена.
+  #    Участник радиочата находится в локации и в радио одновременно — это два разных
+  #    состояния, и одно из них не помещается в `presence`.
+  # 2. Участие — не то же самое, что присутствие. Участие в шёпоте живёт, пока шёпот не
+  #    закрыт, и уход из локации его не разрывает (`D-038`), а присутствие в локации
+  #    заканчивается именно уходом.
+  #
+  # Субъект участника — пара «вид + идентификатор» (`D-086`): участники шёпота это персонажи,
+  # а место мастера занимает участие, потому что персонажа у мастера нет вовсе.
+
+  - changeSet:
+      id: 006-01-chat-member
+      author: e11
+      changes:
+        - createTable:
+            tableName: chat_member
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_chat_member } }
+              - column: { name: chat_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: subject_kind, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: subject_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: state, type: varchar(16), constraints: { nullable: false } }
+              - column: { name: invited_by, type: uuid }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: joined_at, type: timestamptz }
+              - column: { name: left_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: chat_member
+            baseColumnNames: chat_id
+            referencedTableName: chat
+            referencedColumnNames: id
+            constraintName: fk_chat_member_chat
+        # Приглашающий — участие, а не персонаж: пригласить в шёпот может мастер, и тогда
+        # за приглашением не стоит ни одного персонажа.
+        - addForeignKeyConstraint:
+            baseTableName: chat_member
+            baseColumnNames: invited_by
+            referencedTableName: membership
+            referencedColumnNames: id
+            constraintName: fk_chat_member_invited_by
+        # Состояние — словарь, а не свободная строка: по нему решается «пускать ли в чат»,
+        # и опечатка в нём означала бы тихую потерю доступа.
+        - sql:
+            sql: ALTER TABLE chat_member ADD CONSTRAINT chk_chat_member_state CHECK (state IN ('INVITED', 'JOINED', 'DECLINED', 'LEFT'))
+            rollback: ALTER TABLE chat_member DROP CONSTRAINT chk_chat_member_state
+        - sql:
+            sql: ALTER TABLE chat_member ADD CONSTRAINT chk_chat_member_subject_kind CHECK (subject_kind IN ('CHARACTER', 'MEMBERSHIP'))
+            rollback: ALTER TABLE chat_member DROP CONSTRAINT chk_chat_member_subject_kind
+        # Активное участие одно на пару «чат + субъект»: повторное приглашение с тем же
+        # адресатом — не вторая строка, а состояние уже существующей. Предикат задан сырым
+        # `sql`: `createIndex` предикат `where` молча игнорирует (`005-e08.yaml`).
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_chat_member_active ON chat_member (chat_id, subject_kind, subject_id) WHERE state IN ('INVITED', 'JOINED')
+            rollback: DROP INDEX ux_chat_member_active
+        # Обратный ход: «в каких чатах состоит этот персонаж или участие» — им отвечает
+        # список чатов у клиента, и полный проход по таблице дал бы его по строкам всех игр.
+        - sql:
+            sql: CREATE INDEX ix_chat_member_subject ON chat_member (subject_kind, subject_id)
+            rollback: DROP INDEX ix_chat_member_subject

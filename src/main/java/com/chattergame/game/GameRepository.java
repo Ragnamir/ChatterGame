@@ -128,6 +128,14 @@ public class GameRepository {
         jdbc.queryForList("SELECT id FROM game WHERE id = ? FOR KEY SHARE", UUID.class, id);
     }
 
+    /** Ссылка на чат финального обсуждения (`REQUIREMENTS §7.5`). Пишется один раз при завершении. */
+    public void updateFinalChat(UUID id, UUID finalChatId) {
+        jdbc.update(
+                "UPDATE game SET final_chat_id = ?, updated_at = now() WHERE id = ?",
+                finalChatId,
+                id);
+    }
+
     public void markArchived(UUID id, String reason) {
         jdbc.update(
                 "UPDATE game SET archived = true, archived_reason = ?, updated_at = now() WHERE id = ?",

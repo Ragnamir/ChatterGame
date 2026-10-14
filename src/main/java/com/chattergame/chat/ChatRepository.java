@@ -21,7 +21,7 @@ public class ChatRepository {
 
     private static final String COLUMNS =
             "id, game_id, kind, title, description, image_asset_id, archived, archived_reason, "
-                    + "archived_at, created_at";
+                    + "archived_at, disabled, created_at";
 
     private final JdbcTemplate jdbc;
     private final RowMapper<Chat> mapper = this::map;
@@ -33,7 +33,8 @@ public class ChatRepository {
     public void insert(Chat chat) {
         jdbc.update(
                 "INSERT INTO chat (id, game_id, kind, title, description, image_asset_id, archived, "
-                        + "archived_reason, archived_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + "archived_reason, archived_at, disabled, created_at) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 chat.id(),
                 chat.gameId(),
                 chat.kind().name(),
@@ -43,6 +44,7 @@ public class ChatRepository {
                 chat.archived(),
                 chat.archivedReason(),
                 chat.archivedAt() == null ? null : Timestamp.from(chat.archivedAt()),
+                chat.disabled(),
                 Timestamp.from(chat.createdAt()));
     }
 
@@ -59,6 +61,14 @@ public class ChatRepository {
                 mapper,
                 gameId,
                 kind.name());
+    }
+
+    /** Все чаты игры: список личных каналов и финального обсуждения строится по нему. */
+    public List<Chat> findByGame(UUID gameId) {
+        return jdbc.query(
+                "SELECT " + COLUMNS + " FROM chat WHERE game_id = ? ORDER BY created_at, id",
+                mapper,
+                gameId);
     }
 
     public void updateContent(UUID id, String title, String description) {
@@ -85,6 +95,15 @@ public class ChatRepository {
                 id);
     }
 
+    /**
+     * Отключение и включение чата одним оператором (`REQUIREMENTS §7.2`). `null` — не
+     * «неизвестно», а именно отсутствие смены: отдельный «включающий» метод читался бы как
+     * вторая операция, а состояние здесь одно — флаг (`D-110`).
+     */
+    public void setDisabled(UUID id, boolean disabled) {
+        jdbc.update("UPDATE chat SET disabled = ? WHERE id = ?", disabled, id);
+    }
+
     private Chat map(ResultSet rs, int rowNum) throws SQLException {
         Timestamp archivedAt = rs.getTimestamp("archived_at");
         return new Chat(
@@ -97,6 +116,7 @@ public class ChatRepository {
                 rs.getBoolean("archived"),
                 rs.getString("archived_reason"),
                 archivedAt == null ? null : archivedAt.toInstant(),
+                rs.getBoolean("disabled"),
                 rs.getTimestamp("created_at").toInstant());
     }
 }

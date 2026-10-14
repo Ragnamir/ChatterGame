@@ -4,6 +4,7 @@ asset
 auth_identity
 character
 chat
+chat_member
 game
 game_event
 game_stream

@@ -49,6 +49,13 @@ public class RealtimeQueryService {
         return reads.resolveSubject(userId, gameId, asCharacter);
     }
 
+    /** Подписка на закрытый канал (`E11`): субъект и право участия решаются вместе. */
+    @Transactional(readOnly = true)
+    public InboxSubject resolveSubjectForChat(
+            UUID userId, UUID gameId, UUID chatId, UUID asCharacter) {
+        return reads.resolveSubjectForChat(userId, gameId, chatId, asCharacter);
+    }
+
     @Transactional(readOnly = true)
     public Chat requireChat(UUID gameId, UUID chatId) {
         return reads.requireChat(gameId, chatId);

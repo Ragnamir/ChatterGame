@@ -30,8 +30,15 @@ public final class MessageAccess {
      * `MASTER` от лица персонажа (`D-004`). У `JOKE` автор — участие (`D-099`), у `MASTER` без
      * персонажа — мастер, у `SYSTEM` автора нет вовсе.
      *
-     * <p>`presentInChat` — активное присутствие персонажа в этом чате, а не «персонаж есть
-     * в игре»: отсутствующий не читает и не пишет (`REQUIREMENTS §7.1`).
+     * <p>`presentInChat` — право автора писать именно в этот чат: для локации это активное
+     * присутствие персонажа, а не «персонаж есть в игре», для радиочата, шёпота и финального
+     * обсуждения — участие в чате (`REQUIREMENTS §7.1`–§7.5`), для личного чата с мастером —
+     * участие игрока, потому что персонаж там только подпись (`D-037`).
+     *
+     * <p>`channelMember` и `participationMember` — то же участие, но по отдельности: первый
+     * отвечает «этот персонаж в чате», второй — «этот игрок в чате». В шёпоте нужен персонаж,
+     * в личном чате с мастером — игрок, и различие не косметическое: в личном чате персонажа
+     * у участника может не быть в чате вовсе.
      */
     public record Posting(
             MembershipRole role,
@@ -46,7 +53,10 @@ public final class MessageAccess {
             UUID finalChatId,
             Phase phase,
             boolean chatArchived,
+            boolean chatDisabled,
             boolean presentInChat,
+            boolean channelMember,
+            boolean participationMember,
             Set<RestrictionKind> characterRestrictions,
             Set<RestrictionKind> membershipRestrictions) {
     }
@@ -73,7 +83,11 @@ public final class MessageAccess {
         if (posting.chatArchived()) {
             throw ApiException.conflict("chat_archived", "Чат выведен из игры: писать в него нельзя");
         }
+        if (posting.chatDisabled()) {
+            throw ApiException.conflict("chat_disabled", "Канал отключён мастером: писать нельзя");
+        }
         assertKindAllowedInChat(posting, kind);
+        assertChannelMembership(posting, kind);
         assertFinishedRules(posting, kind);
 
         switch (kind) {
@@ -107,6 +121,47 @@ public final class MessageAccess {
                 && kind != MessageKind.JOKE) {
             throw ApiException.badRequest(
                     "master_dm_speech_only", "В личном чате с мастером — только речь и шутки");
+        }
+    }
+
+    /**
+     * Участие в закрытом канале (`REQUIREMENTS §7.2`–§7.4). Радиочат и шёпот держат список
+     * персонажей, личный чат с мастером — список участий (`D-037`), поэтому и проверки две.
+     * Наблюдателю сюда входа нет вовсе: отказ приходит раньше, из проверки автора (`D-063`),
+     * и назвать это «нет участия в чате» значило бы выдать наблюдателю причину чужого отказа.
+     */
+    private static void assertChannelMembership(Posting posting, MessageKind kind) {
+        if (posting.role() == MembershipRole.OBSERVER) {
+            // Наблюдателю закрытый канал не виден вовсе (`D-063`), и причина отказа — роль,
+            // а не отсутствие участия: сказать ему «тебя нет в чате» значило бы подтвердить,
+            // что чат существует. Отказ придёт ниже, из проверок автора.
+            return;
+        }
+        switch (posting.chatKind()) {
+            case RADIO -> {
+                if (kind == MessageKind.SPEECH && !posting.channelMember()) {
+                    throw ApiException.forbidden(
+                            "not_a_chat_member", "Этот персонаж в радиочате не участвует");
+                }
+            }
+            case WHISPER -> {
+                if ((kind == MessageKind.SPEECH || kind == MessageKind.ACTION)
+                        && !posting.channelMember()) {
+                    throw ApiException.forbidden(
+                            "not_a_chat_member", "Этот персонаж в шёпоте не участвует");
+                }
+                if (kind == MessageKind.JOKE && !posting.participationMember()) {
+                    throw ApiException.forbidden("not_a_chat_member", "Этот игрок в шёпоте не участвует");
+                }
+            }
+            case MASTER_DM -> {
+                if (!posting.participationMember()) {
+                    throw ApiException.forbidden(
+                            "not_a_chat_member", "Этот игрок в этом личном чате не участвует");
+                }
+            }
+            default -> {
+            }
         }
     }
 

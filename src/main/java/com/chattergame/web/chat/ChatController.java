@@ -1,5 +1,6 @@
 package com.chattergame.web.chat;
 
+import com.chattergame.chat.ChannelQueryService;
 import com.chattergame.chat.Chat;
 import com.chattergame.chat.ChatGraphService;
 import com.chattergame.chat.EdgeState;
@@ -50,12 +51,17 @@ public class ChatController {
     private final GameMutationService mutations;
     private final GameQueryService queries;
     private final ChatGraphService graph;
+    private final ChannelQueryService channels;
 
     public ChatController(
-            GameMutationService mutations, GameQueryService queries, ChatGraphService graph) {
+            GameMutationService mutations,
+            GameQueryService queries,
+            ChatGraphService graph,
+            ChannelQueryService channels) {
         this.mutations = mutations;
         this.queries = queries;
         this.graph = graph;
+        this.channels = channels;
     }
 
     // --- Локации -----------------------------------------------------------------------
@@ -122,6 +128,113 @@ public class ChatController {
         AuthContext auth = AuthContextResolver.require(context);
         mutations.rejectLocationDeletion(auth.user().id(), gameId, chatId);
         return ResponseEntity.status(HttpStatus.CONFLICT).build();
+    }
+
+    // --- Личные каналы (E11) -----------------------------------------------------------
+
+    /**
+     * Создание радиочата (`REQUIREMENTS §7.2`). Состав задаётся сразу и целиком: радио
+     * соединяет фиксированный круг персонажей, а не место (`D-039`).
+     */
+    @PostMapping("/radios")
+    public ResponseEntity<ChannelView> createRadio(
+            @PathVariable UUID gameId, @Valid @RequestBody RadioRequest request, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        Chat chat = mutations.createRadio(
+                auth.user().id(), gameId, request.title(), request.characterIds());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(channel(auth, gameId, chat.id()));
+    }
+
+    /**
+     * Замена состава радиочата. `PUT`, а не `POST`: вызов задаёт итоговый круг, и повтор
+     * с тем же телом ничего не меняет.
+     */
+    @PutMapping("/channels/{chatId}/members")
+    public ChannelView setChannelMembers(
+            @PathVariable UUID gameId,
+            @PathVariable UUID chatId,
+            @Valid @RequestBody RadioMembersRequest request,
+            AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.setRadioMembers(auth.user().id(), gameId, chatId, request.characterIds());
+        return channel(auth, gameId, chatId);
+    }
+
+    /** Отключение и включение радиочата (`D-039`). Отключённый чат остаётся читаемым. */
+    @PutMapping("/channels/{chatId}/disabled")
+    public ChannelView setChannelDisabled(
+            @PathVariable UUID gameId,
+            @PathVariable UUID chatId,
+            @Valid @RequestBody RadioDisabledRequest request,
+            AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.setRadioDisabled(auth.user().id(), gameId, chatId, request.disabled());
+        return channel(auth, gameId, chatId);
+    }
+
+    /** Создание шёпота (`REQUIREMENTS §7.4`): инициатор внутри, остальные приглашены. */
+    @PostMapping("/whispers")
+    public ResponseEntity<ChannelView> createWhisper(
+            @PathVariable UUID gameId, @Valid @RequestBody WhisperRequest request, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        Chat chat = mutations.createWhisper(auth.user().id(), gameId, request.characterIds());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(channel(auth, gameId, chat.id()));
+    }
+
+    /** Согласие на приглашение (`D-038`): после него шёпот виден и его лента адресуется. */
+    @PostMapping("/channels/{chatId}/accept")
+    public ChannelView acceptWhisper(
+            @PathVariable UUID gameId, @PathVariable UUID chatId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.acceptWhisper(auth.user().id(), gameId, chatId);
+        return channel(auth, gameId, chatId);
+    }
+
+    /** Отказ от приглашения: состояние `DECLINED`, а не тишина, — приглашающий видит ответ. */
+    @PostMapping("/channels/{chatId}/decline")
+    public ChannelView declineWhisper(
+            @PathVariable UUID gameId, @PathVariable UUID chatId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.declineWhisper(auth.user().id(), gameId, chatId);
+        return channel(auth, gameId, chatId);
+    }
+
+    /** Закрытие шёпота участником или мастером (`D-038`): история остаётся читаемой. */
+    @PostMapping("/channels/{chatId}/close")
+    public ChannelView closeWhisper(
+            @PathVariable UUID gameId, @PathVariable UUID chatId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.closeWhisper(auth.user().id(), gameId, chatId);
+        return channel(auth, gameId, chatId);
+    }
+
+    /**
+     * Закрытые каналы игры глазами запросившего. Локации здесь не перечисляются: они лежат
+     * в графе (`E04`), и один список не должен смешивать место и разговор.
+     */
+    @GetMapping("/channels")
+    public List<ChannelView> channels(
+            @PathVariable UUID gameId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        return channels.channels(auth.user().id(), gameId).stream()
+                .map(access -> ChannelView.of(access, channels.participants(gameId, access.chat().id())))
+                .toList();
+    }
+
+    /** Один канал: состояние смотрящего в нём и состав участников (`REQUIREMENTS §7.4`). */
+    @GetMapping("/channels/{chatId}")
+    public ChannelView channel(
+            @PathVariable UUID gameId, @PathVariable UUID chatId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        return channel(auth, gameId, chatId);
+    }
+
+    private ChannelView channel(AuthContext auth, UUID gameId, UUID chatId) {
+        ChannelQueryService.ChannelAccess access =
+                channels.requireVisible(auth.user().id(), gameId, chatId);
+        return ChannelView.of(access, channels.participants(gameId, chatId));
     }
 
     // --- Переходы ----------------------------------------------------------------------

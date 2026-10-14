@@ -114,7 +114,8 @@ public class RealtimeHandler extends TextWebSocketHandler {
         UUID asCharacter = optionalUuid(request, "asCharacter");
         boolean bodies = !request.has("bodies") || request.path("bodies").asBoolean(true);
         Chat chat = reads.requireChat(session.gameId(), chatId);
-        InboxSubject subject = reads.resolveSubject(session.userId(), session.gameId(), asCharacter);
+        InboxSubject subject =
+                reads.resolveSubjectForChat(session.userId(), session.gameId(), chatId, asCharacter);
         session.subscribe(chatId, subject, chat.kind(), bodies);
         session.send(envelope.subscribed(
                 session.gameId(), chatId, subject.kind().name(), subject.id(), chat.kind().name()));

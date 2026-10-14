@@ -34,6 +34,9 @@ public final class PostingCell {
     private UUID characterId;
     private UUID occupant;
     private boolean present = true;
+    private boolean disabled;
+    private boolean channelMember;
+    private boolean participationMember;
     private boolean archived;
     private java.util.Set<RestrictionKind> onCharacter = java.util.Set.of();
     private java.util.Set<RestrictionKind> onMembership = java.util.Set.of();
@@ -42,6 +45,14 @@ public final class PostingCell {
         this.role = role;
         this.chatKind = chatKind;
         this.phase = phase;
+        // Клетка закрытого канала по умолчанию описывает его участника: правило «в радиочате
+        // только речь» проверяется на том, кто в радиочате состоит, иначе отказ шёл бы не
+        // от того правила. Отсутствие участия — отдельная ось, у неё свой метод.
+        boolean privateChannel = chatKind == ChatKind.RADIO
+                || chatKind == ChatKind.WHISPER
+                || chatKind == ChatKind.MASTER_DM;
+        this.channelMember = privateChannel && role != MembershipRole.OBSERVER;
+        this.participationMember = privateChannel && role != MembershipRole.OBSERVER;
     }
 
     /** Мастер в указанном типе чата: персонаж не обязателен, он пишет от любого присутствующего. */
@@ -105,10 +116,26 @@ public final class PostingCell {
         cell.characterId = characterId;
         cell.occupant = occupant;
         cell.present = present;
+        cell.disabled = disabled;
+        cell.channelMember = channelMember;
+        cell.participationMember = participationMember;
         cell.archived = archived;
         cell.onCharacter = onCharacter;
         cell.onMembership = onMembership;
         return cell;
+    }
+
+    /** Участия в закрытом канале нет: `not_a_chat_member` для персонажа и для игрока сразу. */
+    public PostingCell notMember() {
+        this.channelMember = false;
+        this.participationMember = false;
+        return this;
+    }
+
+    /** Канал отключён мастером (`REQUIREMENTS §7.2`). */
+    public PostingCell disabled() {
+        this.disabled = true;
+        return this;
     }
 
     public PostingCell atFinalChat() {
@@ -140,7 +167,10 @@ public final class PostingCell {
                 FINAL_CHAT,
                 phase,
                 chatArchived,
+                disabled,
                 characterId != null && present,
+                channelMember,
+                participationMember,
                 onCharacter,
                 onMembership);
     }

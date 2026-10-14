@@ -24,6 +24,7 @@ public record Chat(
         boolean archived,
         String archivedReason,
         Instant archivedAt,
+        boolean disabled,
         Instant createdAt) {
 
     /** Максимум колонки `chat.title`; проверяется на сервисе ради текста ошибки, не только БД. */

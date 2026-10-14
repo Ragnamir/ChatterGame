@@ -39,6 +39,11 @@ public final class SystemProjection {
         CODES.put(GameEventType.CHAT_CREATED, "chat_created");
         CODES.put(GameEventType.CHAT_CONTENT_CHANGED, "chat_content_changed");
         CODES.put(GameEventType.CHAT_ARCHIVED, "chat_archived");
+        CODES.put(GameEventType.CHAT_ACCESS_CHANGED, "chat_access_changed");
+        CODES.put(GameEventType.CHAT_MEMBER_INVITED, "chat_member_invited");
+        CODES.put(GameEventType.CHAT_MEMBER_JOINED, "chat_member_joined");
+        CODES.put(GameEventType.CHAT_MEMBER_DECLINED, "chat_member_declined");
+        CODES.put(GameEventType.CHAT_MEMBER_LEFT, "chat_member_left");
         CODES.put(GameEventType.TRANSITION_OPENED, "transition_opened");
         CODES.put(GameEventType.TRANSITION_CLOSED, "transition_closed");
         CODES.put(GameEventType.TRANSITION_ARCHIVED, "transition_archived");

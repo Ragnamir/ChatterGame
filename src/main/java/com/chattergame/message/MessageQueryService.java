@@ -3,6 +3,8 @@ package com.chattergame.message;
 import com.chattergame.character.Character;
 import com.chattergame.character.CharacterRepository;
 import com.chattergame.chat.Chat;
+import com.chattergame.chat.ChatKind;
+import com.chattergame.chat.ChatMemberRepository;
 import com.chattergame.chat.ChatRepository;
 import com.chattergame.game.Game;
 import com.chattergame.game.GameQueryService;
@@ -42,6 +44,7 @@ public class MessageQueryService {
     private final InboxRepository inbox;
     private final ReadCursorRepository cursors;
     private final ChatRepository chats;
+    private final ChatMemberRepository channelMembers;
     private final CharacterRepository characters;
     private final MembershipRepository memberships;
     private final GameQueryService games;
@@ -51,6 +54,7 @@ public class MessageQueryService {
             InboxRepository inbox,
             ReadCursorRepository cursors,
             ChatRepository chats,
+            ChatMemberRepository channelMembers,
             CharacterRepository characters,
             MembershipRepository memberships,
             GameQueryService games) {
@@ -58,6 +62,7 @@ public class MessageQueryService {
         this.inbox = inbox;
         this.cursors = cursors;
         this.chats = chats;
+        this.channelMembers = channelMembers;
         this.characters = characters;
         this.memberships = memberships;
         this.games = games;
@@ -72,7 +77,7 @@ public class MessageQueryService {
     public FeedPage feed(UUID userId, UUID gameId, UUID chatId, UUID asCharacter, long afterSeq, int limit) {
         Game game = games.requireReadable(userId, gameId);
         Chat chat = requireChatInternal(gameId, chatId);
-        InboxSubject subject = subjectFor(game, userId, asCharacter);
+        InboxSubject subject = subjectFor(game, userId, asCharacter, chat);
         int size = limit <= 0 ? MAX_PAGE : Math.min(limit, MAX_PAGE);
         List<FeedItem> items = messages.feed(gameId, subject, chatId, Math.max(afterSeq, 0L), size);
         long lastSeq = items.isEmpty()
@@ -89,8 +94,8 @@ public class MessageQueryService {
     @Transactional(readOnly = true)
     public FeedItem entryMessage(UUID userId, UUID gameId, UUID chatId, UUID asCharacter) {
         Game game = games.requireReadable(userId, gameId);
-        requireChatInternal(gameId, chatId);
-        InboxSubject subject = subjectFor(game, userId, asCharacter);
+        Chat chat = requireChatInternal(gameId, chatId);
+        InboxSubject subject = subjectFor(game, userId, asCharacter, chat);
         return messages.lastFor(gameId, subject, chatId).orElse(null);
     }
 
@@ -122,7 +127,32 @@ public class MessageQueryService {
     /**
      * Субъект читающего. Наблюдатель читает участием (`D-086`), игрок и мастер — персонажем;
      * занятость проверяется здесь, потому что `assertCanPost` закрывает запись, а не чтение.
+     *
+     * <p>Закрытые каналы выбирают субъект иначе, и это не фильтрация на чтении (`D-030`), а
+     * выбор «кто я в этом чате». Материал строки задан при записи: личный чат с мастером
+     * адресуется участию, потому что привязан к игроку, а не к персонажу (`D-037`); в шёпоте
+     * и радио участник — персонаж, а мастер сидит участием, потому что персонажа у него нет.
+     * Один и тот же субъект выбирается при записи и при чтении, иначе игрок не увидел бы
+     * собственного разговора.
      */
+    private InboxSubject subjectFor(Game game, UUID userId, UUID asCharacter, Chat chat) {
+        if (chat != null && chat.kind() == ChatKind.MASTER_DM) {
+            return InboxSubject.membership(membershipOf(game, userId).id());
+        }
+        if (chat != null && chat.kind().privateChannel() && asCharacter == null) {
+            Membership master = membershipOf(game, userId);
+            if (master.role() == MembershipRole.MASTER) {
+                return InboxSubject.membership(master.id());
+            }
+        }
+        return subjectFor(game, userId, asCharacter);
+    }
+
+    private Membership membershipOf(Game game, UUID userId) {
+        return memberships.find(game.id(), userId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
+    }
+
     private InboxSubject subjectFor(Game game, UUID userId, UUID asCharacter) {
         Membership membership = memberships.find(game.id(), userId)
                 .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
@@ -166,6 +196,28 @@ public class MessageQueryService {
     public InboxSubject resolveSubject(UUID userId, UUID gameId, UUID asCharacter) {
         Game game = games.requireReadable(userId, gameId);
         return subjectFor(game, userId, asCharacter);
+    }
+
+    /**
+     * Субъект подписки на конкретный чат (`E11`). Личный чат с мастером и шёпот читаются
+     * своим субъектом (`D-037`, `D-086`), и подписка на закрытый канал требует участия:
+     * иначе сокет подписался бы на чужой разговор и ждал строк, которых ему не адресовали.
+     */
+    @Transactional(readOnly = true)
+    public InboxSubject resolveSubjectForChat(
+            UUID userId, UUID gameId, UUID chatId, UUID asCharacter) {
+        Game game = games.requireReadable(userId, gameId);
+        Chat chat = requireChatInternal(gameId, chatId);
+        InboxSubject subject = subjectFor(game, userId, asCharacter, chat);
+        if (chat.kind().privateChannel() && channelMembers.findActive(chatId, subject).isEmpty()) {
+            Membership membership = membershipOf(game, userId);
+            boolean overseer = membership.role() == MembershipRole.MASTER
+                    && chat.kind() != ChatKind.MASTER_DM;
+            if (!overseer) {
+                throw ApiException.forbidden("not_a_chat_member", "Этот канал вам не виден");
+            }
+        }
+        return subject;
     }
 
     /** Чат игры с проверкой принадлежности: общая точка для HTTP и сокета (`E09`). */

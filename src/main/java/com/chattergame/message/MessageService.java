@@ -163,7 +163,7 @@ public class MessageService {
     @Transactional
     public Map<String, Object> markRead(UUID userId, UUID gameId, UUID chatId, UUID asCharacter, long seq) {
         Chat chat = requireChat(gameId, chatId);
-        InboxSubject subject = readSubject(gameId, userId, asCharacter);
+        InboxSubject subject = readSubject(gameId, userId, asCharacter, chat.kind());
         long target = seq <= 0 ? messages.maxEventSeqInChat(chatId) : seq;
         // отметка не может обогнать ленту: курсор за пределами выданного дал бы «прочитано
         // больше, чем показано», и клиент потерял бы строки при следующем чтении
@@ -184,7 +184,7 @@ public class MessageService {
     @Transactional
     public Map<String, Object> enterChat(UUID userId, UUID gameId, UUID chatId, UUID asCharacter) {
         Chat chat = requireChat(gameId, chatId);
-        InboxSubject subject = readSubject(gameId, userId, asCharacter);
+        InboxSubject subject = readSubject(gameId, userId, asCharacter, chat.kind());
         long max = messages.maxEventSeqInChat(chatId);
         cursors.advance(subject, chatId, max);
         FeedItem last = messages.lastFor(gameId, subject, chatId).orElse(null);
@@ -196,11 +196,22 @@ public class MessageService {
         return result;
     }
 
-    private InboxSubject readSubject(UUID gameId, UUID userId, UUID asCharacter) {
+    /**
+     * Субъект чтения. У закрытых каналов он свой: личный чат с мастером адресуется участию,
+     * потому что привязан к игроку, а не к персонажу (`D-037`), и мастер читает шёпот и радио
+     * тоже участием — персонажа у него нет. Остальные случаи прежние (`D-086`, `D-063`).
+     */
+    private InboxSubject readSubject(UUID gameId, UUID userId, UUID asCharacter, ChatKind kind) {
         Game game = games.findById(gameId)
                 .orElseThrow(() -> ApiException.notFound("game_not_found", "Игра не найдена"));
         Membership membership = memberships.find(gameId, userId)
                 .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
+        if (kind == ChatKind.MASTER_DM
+                || (kind != null && kind.privateChannel()
+                        && asCharacter == null
+                        && membership.role() == com.chattergame.game.MembershipRole.MASTER)) {
+            return InboxSubject.membership(membership.id());
+        }
         if (membership.role() == com.chattergame.game.MembershipRole.OBSERVER) {
             if (asCharacter != null) {
                 throw ApiException.forbidden("observer_has_no_character", "У наблюдателя нет персонажа");

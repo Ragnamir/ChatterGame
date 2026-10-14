@@ -106,7 +106,7 @@ class E10BudgetTest extends E10TestSupport {
         Fixture fixture = turnGame(true);
         Turn turn = fixture.openTurn();
         UUID second = fixture.secondLocation("Второе место");
-        UUID radio = fixture.chatOfKind("RADIO", "Радио");
+        UUID radio = fixture.channelOfKind("RADIO", "Радио", fixture.character.id());
 
         writes.post(fixture.playerUserId, fixture.gameId, fixture.locationId, fixture.character.id(),
                 MessageKind.SPEECH, "здесь", false);
@@ -129,7 +129,6 @@ class E10BudgetTest extends E10TestSupport {
                 .extracting(exception -> ((ApiException) exception).code())
                 .isEqualTo("turn_action_used");
 
-        fixture.presenceIn(radio);
         assertThatThrownBy(() -> writes.post(
                 fixture.playerUserId, fixture.gameId, radio, fixture.character.id(),
                 MessageKind.SPEECH, "в радио", false))
@@ -152,8 +151,7 @@ class E10BudgetTest extends E10TestSupport {
     void theMasterDmLimitIsNotConsumed() throws Exception {
         Fixture fixture = turnGame(true);
         Turn turn = fixture.openTurn();
-        UUID masterDm = fixture.chatOfKind("MASTER_DM", "Личный чат");
-        fixture.presenceIn(masterDm);
+        UUID masterDm = fixture.masterDm();
 
         for (int i = 0; i < 3; i++) {
             writes.post(fixture.playerUserId, fixture.gameId, masterDm, fixture.character.id(),

@@ -2,6 +2,9 @@ package com.chattergame.game;
 
 import com.chattergame.chat.Chat;
 import com.chattergame.chat.ChatKind;
+import com.chattergame.chat.ChatMember;
+import com.chattergame.chat.ChatMemberRepository;
+import com.chattergame.chat.ChatMemberState;
 import com.chattergame.chat.ChatRepository;
 import com.chattergame.chat.EdgeState;
 import com.chattergame.chat.Transition;
@@ -45,9 +48,15 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Единственное писательское горло на игру (`D-034`). Каждая мутация мира проходит здесь:
@@ -65,6 +74,15 @@ import java.util.UUID;
  */
 @Service
 public class GameMutationService {
+
+    /** Название шёпота одно на все: у него нет имени, а в списке чатов он помещается участниками. */
+    private static final String CHANNEL_WHISPER_TITLE = "Шёпот";
+
+    /** Чат финального обсуждения один на игру (`REQUIREMENTS §7.5`). */
+    private static final String CHANNEL_FINAL_TITLE = "Финальное обсуждение";
+
+    /** Личный чат подписан одинаково у обоих: имя собеседника клиент берёт из своего списка. */
+    private static final String CHANNEL_MASTER_DM_TITLE = "Мастер";
 
     private final GameRepository games;
     private final MembershipRepository memberships;
@@ -84,6 +102,7 @@ public class GameMutationService {
     private final RestrictionRepository restrictions;
     private final RealtimeEvents realtime;
     private final TurnRepository turns;
+    private final ChatMemberRepository channelMembers;
 
     public GameMutationService(
             GameRepository games,
@@ -103,7 +122,8 @@ public class GameMutationService {
             InboxMaterializer inbox,
             RestrictionRepository restrictions,
             RealtimeEvents realtime,
-            TurnRepository turns) {
+            TurnRepository turns,
+            ChatMemberRepository channelMembers) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
@@ -122,6 +142,7 @@ public class GameMutationService {
         this.restrictions = restrictions;
         this.realtime = realtime;
         this.turns = turns;
+        this.channelMembers = channelMembers;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -291,6 +312,10 @@ public class GameMutationService {
         }
 
         GameState next = GameStateMachine.apply(game.state(), transition, pauseReason);
+        // Чат финального обсуждения открывается завершением и только им (`REQUIREMENTS §7.5`).
+        // Отдельного события у него нет: он часть перехода, а не вторая мутация, и журнал
+        // обязан воспроизвести его из `GAME_FINISHED`, а не из соседней строки (`D-033`).
+        Chat finalChat = transition == GameTransition.FINISH ? openFinalChat(game) : null;
         games.updateState(next);
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -298,6 +323,10 @@ public class GameMutationService {
         payload.put("to", next.readiness().name() + "/" + next.phase().name());
         if (next.pauseReason() != null) {
             payload.put("reason", next.pauseReason());
+        }
+        if (finalChat != null) {
+            payload.put("finalChatId", finalChat.id().toString());
+            payload.put("finalChatTitle", finalChat.title());
         }
         event(gameId, eventTypeOf(transition), actorUserId, payload);
         return requireGame(gameId);
@@ -392,6 +421,8 @@ public class GameMutationService {
                 status == MembershipStatus.LEFT ? now : null);
         memberships.insert(membership);
         event(gameId, eventTypeOf(status), actorUserId, payload("userId", userId.toString()));
+        // Личный чат с мастером заводится входом в игру, а не отдельным действием (`D-037`).
+        openMasterDm(requireGame(gameId), membership);
         return membership;
     }
 
@@ -418,6 +449,9 @@ public class GameMutationService {
                 status == MembershipStatus.LEFT ? now : current.leftAt());
         memberships.updateStatus(next);
         event(gameId, eventTypeOf(status), actorUserId, payload("userId", userId.toString()));
+        if (status == MembershipStatus.JOINED) {
+            openMasterDm(requireGame(gameId), next);
+        }
         return next;
     }
 
@@ -453,6 +487,7 @@ public class GameMutationService {
                 false,
                 null,
                 null,
+                false,
                 now);
         chats.insert(chat);
         Map<String, Object> payload = payload("chatId", chat.id().toString());
@@ -1468,6 +1503,388 @@ public class GameMutationService {
                     "observer_has_no_character", "Наблюдатель не пишет, запрет шуток ему не нужен");
         }
         return null;
+    }
+
+    // --- Личные каналы (E11) -----------------------------------------------------------
+
+    /**
+     * Радиочат (`REQUIREMENTS §7.2`). Список персонажей задаёт мастер, и это не украшение:
+     * радио связывает фиксированный круг, а не место, поэтому участники не обязаны быть
+     * в одной локации (`D-039`).
+     */
+    @Transactional
+    public Chat createRadio(UUID actorUserId, UUID gameId, String title, List<UUID> characterIds) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        requireText(title, "title_required", "Укажите название радиочата", Chat.TITLE_MAX);
+
+        UUID masterMembershipId = memberships.find(gameId, actorUserId).map(Membership::id)
+                .orElseThrow(() -> ApiException.forbidden("not_master", "Изменять мир может только мастер"));
+        Chat chat = insertChannel(gameId, ChatKind.RADIO, title.strip());
+        for (UUID characterId : requireChannelCharacters(gameId, characterIds)) {
+            channelMembers.insert(ChatMember.joined(
+                    Uuids.v7(), chat.id(), InboxSubject.character(characterId), masterMembershipId));
+        }
+        Map<String, Object> payload = channelPayload(chat);
+        payload.put("characterIds", characterIds.stream().map(Object::toString).toList());
+        eventInChat(gameId, GameEventType.CHAT_CREATED, actorUserId, chat.id(), null, payload);
+        return chat;
+    }
+
+    /**
+     * Замена списка участников радиочата (`REQUIREMENTS §7.2`). Набор, а не добавление:
+     * мастер ведёт фиксированный круг, и «убрать одного» — такая же правка, как «добавить».
+     */
+    @Transactional
+    public Chat setRadioMembers(UUID actorUserId, UUID gameId, UUID chatId, List<UUID> characterIds) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Chat chat = requireChatOfKind(gameId, chatId, ChatKind.RADIO);
+        UUID masterMembershipId = memberships.find(gameId, actorUserId).map(Membership::id).orElseThrow();
+        Set<UUID> wanted = new LinkedHashSet<>(requireChannelCharacters(gameId, characterIds));
+
+        for (ChatMember member : channelMembers.findActiveByChat(chatId)) {
+            if (member.state() != ChatMemberState.JOINED
+                    || member.subject().kind() != SubjectKind.CHARACTER
+                    || wanted.contains(member.subject().id())) {
+                continue;
+            }
+            channelMembers.close(member.id(), ChatMemberState.LEFT);
+            event(gameId, GameEventType.CHAT_MEMBER_LEFT, actorUserId,
+                    memberPayload(chatId, member.subject()));
+        }
+        Set<UUID> present = new LinkedHashSet<>();
+        for (ChatMember member : channelMembers.findActiveByChat(chatId)) {
+            if (member.state() == ChatMemberState.JOINED
+                    && member.subject().kind() == SubjectKind.CHARACTER) {
+                present.add(member.subject().id());
+            }
+        }
+        for (UUID characterId : wanted) {
+            if (present.contains(characterId)) {
+                continue;
+            }
+            channelMembers.insert(ChatMember.joined(
+                    Uuids.v7(), chatId, InboxSubject.character(characterId), masterMembershipId));
+            event(gameId, GameEventType.CHAT_MEMBER_JOINED, actorUserId,
+                    memberPayload(chatId, InboxSubject.character(characterId)));
+        }
+        return requireChatOfKind(gameId, chatId, ChatKind.RADIO);
+    }
+
+    /**
+     * Отключение радиочата (`REQUIREMENTS §7.2`, `D-039`). Отключённый чат остаётся
+     * читаемым: история связи — часть игры, и выключатель её не стирает (`D-010`).
+     */
+    @Transactional
+    public Chat setRadioDisabled(UUID actorUserId, UUID gameId, UUID chatId, boolean disabled) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Chat chat = requireChatOfKind(gameId, chatId, ChatKind.RADIO);
+        if (chat.disabled() == disabled) {
+            return chat;
+        }
+        chats.setDisabled(chatId, disabled);
+        Map<String, Object> payload = payload("chatId", chatId.toString());
+        payload.put("disabled", disabled);
+        eventInGame(gameId, GameEventType.CHAT_ACCESS_CHANGED, actorUserId, chatId, payload);
+        return requireChatOfKind(gameId, chatId, ChatKind.RADIO);
+    }
+
+    /**
+     * Шёпот (`REQUIREMENTS §7.4`, `D-038`, `D-097`). Условия проверяются в момент
+     * приглашения: одна локация, одинаковая скрытность, разрешение говорить. Инициатор
+     * входит сразу, остальные — по согласию, поэтому «приглашён» и «внутри» разные состояния.
+     */
+    @Transactional
+    public Chat createWhisper(UUID actorUserId, UUID gameId, List<UUID> characterIds) {
+        Game game = requireGame(gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Membership actor = memberships.find(gameId, actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет участия в этой игре"));
+        if (!actor.joined() || actor.banned()) {
+            throw ApiException.forbidden("membership_not_joined", "Участие в этой игре не активно");
+        }
+        List<UUID> wanted = requireChannelCharacters(gameId, characterIds);
+        if (wanted.isEmpty()) {
+            throw ApiException.badRequest("whisper_empty", "Шёпот без участников не нужен");
+        }
+
+        List<Character> speakers = new ArrayList<>();
+        for (UUID characterId : wanted) {
+            speakers.add(requireCharacter(gameId, characterId));
+        }
+        boolean initiatorInWhisper = speakers.stream()
+                .anyMatch(character -> actor.id().equals(character.occupantMembershipId()));
+        if (!initiatorInWhisper) {
+            throw ApiException.forbidden(
+                    "whisper_initiator_not_invited", "Шёпот начинают от лица своего персонажа");
+        }
+        Set<UUID> players = speakers.stream()
+                .map(Character::occupantMembershipId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (players.size() < 2) {
+            throw ApiException.badRequest(
+                    "whisper_players", "В шёпоте нужны персонажи разных игроков");
+        }
+        assertWhisperConditions(gameId, speakers);
+
+        Chat chat = insertChannel(gameId, ChatKind.WHISPER, CHANNEL_WHISPER_TITLE);
+        for (Character speaker : speakers) {
+            boolean mine = actor.id().equals(speaker.occupantMembershipId());
+            channelMembers.insert(mine
+                    ? ChatMember.joined(Uuids.v7(), chat.id(), InboxSubject.character(speaker.id()), actor.id())
+                    : ChatMember.invited(Uuids.v7(), chat.id(), InboxSubject.character(speaker.id()), actor.id()));
+        }
+        // Мастер состоит по умолчанию (`D-038`): шёпот для него — не тайна, а часть надзора.
+        channelMembers.insert(ChatMember.joined(
+                Uuids.v7(), chat.id(), InboxSubject.membership(masterMembershipId(gameId, game)), actor.id()));
+
+        Map<String, Object> payload = channelPayload(chat);
+        payload.put("characterIds", wanted.stream().map(Object::toString).toList());
+        eventInChat(gameId, GameEventType.CHAT_CREATED, actorUserId, chat.id(), null, payload);
+        for (ChatMember member : channelMembers.findActiveByChat(chat.id())) {
+            if (member.state() == ChatMemberState.INVITED) {
+                event(gameId, GameEventType.CHAT_MEMBER_INVITED, actorUserId,
+                        memberPayload(chat.id(), member.subject()));
+            }
+        }
+        return chat;
+    }
+
+    /** Согласие на участие в шёпоте (`REQUIREMENTS §7.4`): приглашение становится входом. */
+    @Transactional
+    public Chat acceptWhisper(UUID actorUserId, UUID gameId, UUID chatId) {
+        Membership actor = requireWhisperActor(gameId, actorUserId, chatId);
+        List<ChatMember> invitations = invitationsOf(gameId, chatId, actor);
+        if (invitations.isEmpty()) {
+            throw ApiException.notFound("whisper_invitation_not_found", "Приглашения в этот шёпот нет");
+        }
+        for (ChatMember invitation : invitations) {
+            channelMembers.join(invitation.id());
+            event(gameId, GameEventType.CHAT_MEMBER_JOINED, actorUserId,
+                    memberPayload(chatId, invitation.subject()));
+        }
+        return requireChatOfKind(gameId, chatId, ChatKind.WHISPER);
+    }
+
+    /** Отказ от приглашения: `DECLINED`, а не тишина, — иначе приглашающий ждал бы вечно. */
+    @Transactional
+    public Chat declineWhisper(UUID actorUserId, UUID gameId, UUID chatId) {
+        Membership actor = requireWhisperActor(gameId, actorUserId, chatId);
+        List<ChatMember> invitations = invitationsOf(gameId, chatId, actor);
+        if (invitations.isEmpty()) {
+            throw ApiException.notFound("whisper_invitation_not_found", "Приглашения в этот шёпот нет");
+        }
+        for (ChatMember invitation : invitations) {
+            channelMembers.close(invitation.id(), ChatMemberState.DECLINED);
+            event(gameId, GameEventType.CHAT_MEMBER_DECLINED, actorUserId,
+                    memberPayload(chatId, invitation.subject()));
+        }
+        return requireChatOfKind(gameId, chatId, ChatKind.WHISPER);
+    }
+
+    /**
+     * Закрытие шёпота участником или мастером (`D-038`). Участия закрываются, а чат
+     * архивируется: шёпот кончился, но история остаётся читаемой (`D-010`).
+     */
+    @Transactional
+    public Chat closeWhisper(UUID actorUserId, UUID gameId, UUID chatId) {
+        Game game = requireGame(gameId);
+        Membership actor = memberships.find(gameId, actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет участия в этой игре"));
+        Chat chat = requireChatOfKind(gameId, chatId, ChatKind.WHISPER);
+        if (chat.archived()) {
+            return chat;
+        }
+        boolean master = actor.role() == MembershipRole.MASTER && !actor.banned();
+        boolean member = !invitationsOfAll(gameId, chatId, actor).isEmpty();
+        if (!master && !member) {
+            throw ApiException.forbidden("not_a_chat_member", "Этот игрок в шёпоте не участвует");
+        }
+        for (ChatMember active : channelMembers.findActiveByChat(chatId)) {
+            channelMembers.close(active.id(), ChatMemberState.LEFT);
+        }
+        chats.markArchived(chatId, master ? "шёпот закрыт мастером" : "шёпот закрыт участником");
+        eventInChat(gameId, GameEventType.CHAT_ARCHIVED, actorUserId, chatId, null,
+                payload("chatId", chatId.toString()));
+        return requireChatOfKind(gameId, chatId, ChatKind.WHISPER);
+    }
+
+    /**
+     * Чат финального обсуждения (`REQUIREMENTS §7.5`): один на игру, создаётся завершением,
+     * принимает всех персонажей. Публичного списка участников у него нет, поэтому «все» —
+     * это строки `chat_member` на каждого неархивного персонажа, а не правило на чтении
+     * (`D-030`).
+     */
+    private Chat openFinalChat(Game game) {
+        if (game.finalChatId() != null) {
+            return chats.findById(game.finalChatId()).orElseThrow(() -> ApiException.conflict(
+                    "final_chat_missing", "У завершённой игры нет чата финального обсуждения"));
+        }
+        Chat chat = insertChannel(game.id(), ChatKind.FINAL, CHANNEL_FINAL_TITLE);
+        UUID masterMembershipId = masterMembershipId(game.id(), game);
+        for (Character character : characters.findByGame(game.id())) {
+            if (character.archived()) {
+                continue;
+            }
+            channelMembers.insert(ChatMember.joined(
+                    Uuids.v7(), chat.id(), InboxSubject.character(character.id()), masterMembershipId));
+        }
+        channelMembers.insert(ChatMember.joined(
+                Uuids.v7(), chat.id(), InboxSubject.membership(masterMembershipId), masterMembershipId));
+        games.updateFinalChat(game.id(), chat.id());
+        return chat;
+    }
+
+    /** Личный чат с мастером на участие (`D-037`): заводится входом в игру, а не мастером. */
+    private void openMasterDm(Game game, Membership membership) {
+        if (membership.role() != MembershipRole.PLAYER
+                || membership.status() != MembershipStatus.JOINED) {
+            return;
+        }
+        InboxSubject subject = InboxSubject.membership(membership.id());
+        boolean exists = channelMembers.findActiveBySubject(game.id(), subject).stream()
+                .map(ChatMember::chatId)
+                .map(chats::findById)
+                .flatMap(java.util.Optional::stream)
+                .anyMatch(chat -> chat.kind() == ChatKind.MASTER_DM);
+        if (exists) {
+            return;
+        }
+        Chat chat = insertChannel(game.id(), ChatKind.MASTER_DM, CHANNEL_MASTER_DM_TITLE);
+        UUID masterMembershipId = masterMembershipId(game.id(), game);
+        channelMembers.insert(ChatMember.joined(Uuids.v7(), chat.id(), subject, masterMembershipId));
+        // Мастер — вторая сторона разговора, а не надзиратель: он и читает, и отвечает
+        // (`REQUIREMENTS §7.3`). Без его строки участия ответ мастера отклонялся бы как
+        // запись в чужой канал, и личный чат оказался бы улицей с односторонним движением.
+        channelMembers.insert(ChatMember.joined(
+                Uuids.v7(), chat.id(), InboxSubject.membership(masterMembershipId), masterMembershipId));
+        Map<String, Object> payload = channelPayload(chat);
+        payload.put("membershipId", membership.id().toString());
+        eventInChat(game.id(), GameEventType.CHAT_CREATED, membership.userId(), chat.id(), null, payload);
+    }
+
+    /** Проверки шёпота в момент приглашения: одна локация, одна скрытность, право говорить. */
+    private void assertWhisperConditions(UUID gameId, List<Character> speakers) {
+        UUID location = null;
+        boolean hidden = false;
+        for (Character speaker : speakers) {
+            Presence placement = presence.findActive(speaker.id())
+                    .orElseThrow(() -> ApiException.conflict(
+                            "whisper_same_location",
+                            "Шептаться можно только там, где персонаж находится"));
+            if (location == null) {
+                location = placement.chatId();
+                hidden = placement.hidden();
+            } else if (!location.equals(placement.chatId())) {
+                throw ApiException.conflict(
+                        "whisper_same_location", "Собеседники должны быть в одной локации");
+            } else if (hidden != placement.hidden()) {
+                throw ApiException.conflict(
+                        "whisper_same_stealth", "Скрытность собеседников должна совпадать");
+            }
+            boolean muted = restrictions.findNotRevoked(gameId, InboxSubject.character(speaker.id())).stream()
+                    .anyMatch(restriction -> restriction.kind() == RestrictionKind.NO_SPEECH
+                            && restriction.activeAt(Instant.now()));
+            if (muted) {
+                throw ApiException.conflict(
+                        "whisper_speech_restricted", "Собеседнику запрещена речь");
+            }
+        }
+    }
+
+    private List<UUID> requireChannelCharacters(UUID gameId, List<UUID> characterIds) {
+        if (characterIds == null || characterIds.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> distinct = new LinkedHashSet<>(characterIds);
+        if (distinct.size() != characterIds.size()) {
+            throw ApiException.badRequest("channel_member_duplicate", "Персонаж указан дважды");
+        }
+        for (UUID characterId : distinct) {
+            Character character = requireCharacter(gameId, characterId);
+            if (character.archived()) {
+                throw ApiException.conflict("character_archived", "Персонаж выведен из игры");
+            }
+        }
+        return List.copyOf(distinct);
+    }
+
+    /** Приглашения участия в шёпоте: персонажи, которыми игрок играет, и его участие. */
+    private List<ChatMember> invitationsOf(UUID gameId, UUID chatId, Membership actor) {
+        return invitationsOfAll(gameId, chatId, actor).stream()
+                .filter(member -> member.state() == ChatMemberState.INVITED)
+                .toList();
+    }
+
+    private List<ChatMember> invitationsOfAll(UUID gameId, UUID chatId, Membership actor) {
+        Set<UUID> mine = characters.findByGame(gameId).stream()
+                .filter(character -> actor.id().equals(character.occupantMembershipId()))
+                .map(Character::id)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return channelMembers.findActiveByChat(chatId).stream()
+                .filter(member -> switch (member.subject().kind()) {
+                    case CHARACTER -> mine.contains(member.subject().id());
+                    case MEMBERSHIP -> actor.id().equals(member.subject().id());
+                })
+                .toList();
+    }
+
+    private Membership requireWhisperActor(UUID gameId, UUID actorUserId, UUID chatId) {
+        requireGame(gameId);
+        requireChatOfKind(gameId, chatId, ChatKind.WHISPER);
+        Membership actor = memberships.find(gameId, actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет участия в этой игре"));
+        if (!actor.joined() || actor.banned()) {
+            throw ApiException.forbidden("membership_not_joined", "Участие в этой игре не активно");
+        }
+        return actor;
+    }
+
+    /** Событие вне чата: отключение радио видно и в общем канале игры, а не только в ленте. */
+    private void eventInGame(
+            UUID gameId, GameEventType type, UUID actorUserId, UUID chatId, Map<String, Object> payload) {
+        long seq = record(gameId, type, actorUserId, chatId, null, false, payload);
+        projectSystem(gameId, type, chatId, seq);
+    }
+
+    private Chat insertChannel(UUID gameId, ChatKind kind, String title) {
+        Instant now = Instant.now();
+        Chat chat = new Chat(
+                Uuids.v7(), gameId, kind, title, null, null, false, null, null, false, now);
+        chats.insert(chat);
+        return chat;
+    }
+
+    private Map<String, Object> channelPayload(Chat chat) {
+        Map<String, Object> payload = payload("chatId", chat.id().toString());
+        payload.put("kind", chat.kind().name());
+        payload.put("title", chat.title());
+        return payload;
+    }
+
+    private static Map<String, Object> memberPayload(UUID chatId, InboxSubject subject) {
+        Map<String, Object> payload = payload("chatId", chatId.toString());
+        payload.put("subjectKind", subject.kind().name());
+        payload.put("subjectId", subject.id().toString());
+        return payload;
+    }
+
+    private Chat requireChatOfKind(UUID gameId, UUID chatId, ChatKind kind) {
+        Chat chat = chats.findById(chatId)
+                .orElseThrow(() -> ApiException.notFound("chat_not_found", "Чат не найден"));
+        if (!chat.gameId().equals(gameId) || chat.kind() != kind) {
+            throw ApiException.notFound("chat_not_found", "Чат не найден");
+        }
+        return chat;
+    }
+
+    private UUID masterMembershipId(UUID gameId, Game game) {
+        return memberships.find(gameId, game.masterUserId())
+                .map(Membership::id)
+                .orElseThrow(() -> ApiException.conflict("master_absent", "У игры нет мастера"));
     }
 
     // --- Общие проверки ----------------------------------------------------------------

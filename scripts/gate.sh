@@ -354,6 +354,88 @@ case "$stage" in
       echo "FAIL: E10 требует эндпоинты счётчика, открытия и закрытия хода"
     fi
     ;;
+  E11)
+    # Участие в закрытом канале — состояние строки `chat_member`, а не присутствие в локации
+    # (`D-123`): проверки адресные, потому что соблазн «хранить участника радио в presence»
+    # ломает ограничение «активное присутствие одно на персонажа» из `003-e06.yaml`.
+    if [ -f src/main/resources/db/changelog/changes/006-e11.yaml ]; then
+      echo "  ok: E11 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E11 требует changes/006-e11.yaml (участники закрытых каналов)"
+    fi
+    if grep -rq 'tableName: chat_member' src/main/resources/db/changelog/changes/006-e11.yaml; then
+      echo "  ok: E11 — таблица участников закрытых каналов объявлена"
+    else
+      fail=1
+      echo "FAIL: E11 требует таблицу chat_member"
+    fi
+    # Миграции этапа обязаны попасть в манифест отпечатков: без записи гейт не заметит
+    # правку применённого changeset (E01, `AGENTS §1`).
+    if grep -q '006-e11.yaml' src/main/resources/contract/changelog-manifest.txt; then
+      echo "  ok: E11 — отпечаток миграции внесён в манифест"
+    else
+      fail=1
+      echo "FAIL: E11 требует отпечаток 006-e11.yaml в changelog-manifest.txt"
+    fi
+    # Личный чат заводится входом в игру, а не действием мастера (`D-037`): точка входа
+    # обязана жить в пути участия, иначе канал пришлось бы открывать руками.
+    if grep -rq 'openMasterDm' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E11 — личный чат с мастером открывается входом в игру (D-037)"
+    else
+      fail=1
+      echo "FAIL: E11 требует открытия личного чата при JOINED (D-037)"
+    fi
+    # Финальный чат создаётся завершением, а не отдельным вызовом мастера (§7.5, `D-033`).
+    if grep -rq 'openFinalChat' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E11 — чат финального обсуждения открывается переходом FINISH"
+    else
+      fail=1
+      echo "FAIL: E11 требует открытия финального чата на FINISH (REQUIREMENTS §7.5)"
+    fi
+    # Радио только речь и отключение мастером (`D-039`): и то и другое обязано быть
+    # проверкой пути записи, а не пожеланием в документации.
+    if grep -rq 'radio_speech_only' src/main/java/com/chattergame/message/MessageAccess.java \
+      && grep -rq 'chat_disabled' src/main/java/com/chattergame/message/MessageAccess.java; then
+      echo "  ok: E11 — радио ограничено речью и умеет отключаться (D-039)"
+    else
+      fail=1
+      echo "FAIL: E11 требует ограничений радиочата в assertCanPost (D-039)"
+    fi
+    # Шёпот без согласия — приглашение, а не участие (`D-038`): строка `chat_member`
+    # обязана различать эти состояния, иначе согласие превращается в формальность.
+    if grep -rq 'ChatMemberState.INVITED' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E11 — шёпот различает приглашение и согласие (D-038)"
+    else
+      fail=1
+      echo "FAIL: E11 требует состояния INVITED у шёпота (D-038)"
+    fi
+    # Наблюдателю закрытых каналов нет вовсе (`D-063`), а не «меньше строк»: проверка
+    # адресная, потому что частичная выдача выглядела бы работающей.
+    if grep -rq 'openToObservers' src/main/java/com/chattergame/chat/ChannelQueryService.java; then
+      echo "  ok: E11 — наблюдатель получает только открытый финальный чат (D-063)"
+    else
+      fail=1
+      echo "FAIL: E11 требует разграничения открытых каналов для наблюдателя (D-063)"
+    fi
+    # Веб-слой каналов: создание радио, шёпот по согласию, список и отключение.
+    if grep -rq '"/channels"' src/main/java/com/chattergame/web/chat/ChatController.java \
+      && grep -rq '"/radios"' src/main/java/com/chattergame/web/chat/ChatController.java \
+      && grep -rq '"/whispers"' src/main/java/com/chattergame/web/chat/ChatController.java; then
+      echo "  ok: E11 — веб-слой каналов на месте"
+    else
+      fail=1
+      echo "FAIL: E11 требует эндпоинты каналов, радио и шёпота"
+    fi
+    # Контроллеры не пишут в доменные таблицы (`D-034`): любая мутация канала идёт через
+    # GameMutationService, иначе журнал перестанет быть источником истины.
+    if grep -rnE 'jdbc\.(update|execute)\(' src/main/java/com/chattergame/web/chat >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E11 — контроллер каналов пишет в БД напрямую вместо GameMutationService"
+    else
+      echo "  ok: E11 — контроллеры каналов не пишут в доменные таблицы"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;
