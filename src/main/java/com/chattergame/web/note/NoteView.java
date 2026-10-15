@@ -10,9 +10,10 @@ import java.util.UUID;
 /**
  * Заметка в ответе (`REQUIREMENTS §15.1`).
  *
- * <p>`targetKind`/`targetId` — цель заметки, по ней клиент ставит маркер владельца: у игрока
- * с несколькими персонажами заметки приходят списком, и объединение без маркера было бы
- * неотличимо от одной заметки (`D-053`).
+ * <p>`targetKind`/`targetId`/`targetLabel` — цель заметки и её подпись: маркер владельца
+ * у игрока с несколькими персонажами (`D-053`). Подпись отдаётся готовой (`D-127`), чтобы
+ * панель не ходила вторым запросом за именами персонажей. Имя приходит живым: правка карточки
+ * мастером сдвигает подпись, и это осознанно отличается от снимка говорящего (`D-055`).
  *
  * <p>`matchingPending` — признак незавершённого досчёта (`D-087`). Пока он поднят, клиент
  * показывает «подсветка готовится», а не пустой список: молчаливое отсутствие подсветки
@@ -24,6 +25,7 @@ public record NoteView(
         UUID authorMembershipId,
         String targetKind,
         UUID targetId,
+        String targetLabel,
         String body,
         boolean matchingPending,
         Instant createdAt,
@@ -38,13 +40,14 @@ public record NoteView(
         }
     }
 
-    public static NoteView of(Note note, List<NoteKeyword> keywords) {
+    public static NoteView of(Note note, List<NoteKeyword> keywords, String targetLabel) {
         return new NoteView(
                 note.id(),
                 note.gameId(),
                 note.authorMembershipId(),
                 note.target().kind().name(),
                 note.target().id(),
+                targetLabel,
                 note.body(),
                 note.matchingPending(),
                 note.createdAt(),
@@ -53,6 +56,6 @@ public record NoteView(
     }
 
     public static NoteView of(Note.WithKeywords note) {
-        return of(note.note(), note.keywords());
+        return of(note.note(), note.keywords(), note.targetLabel());
     }
 }

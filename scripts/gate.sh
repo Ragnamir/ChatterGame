@@ -486,6 +486,16 @@ case "$stage" in
       fail=1
       echo "FAIL: E12 требует флага точного совпадения для имён (D-051)"
     fi
+    # Маркер владельца отдаётся подписью цели (`D-053`, `D-127`): без неё панель тетради
+    # отличала бы записи своих персонажей вторым запросом за именами.
+    if grep -rq 'targetLabel' src/main/java/com/chattergame/note \
+      && grep -rq 'targetLabel' src/main/java/com/chattergame/web/note \
+      && grep -q 'targetLabel' src/main/resources/openapi/openapi.yaml; then
+      echo "  ok: E12 — маркер владельца отдаётся подписью цели (D-053, D-127)"
+    else
+      fail=1
+      echo "FAIL: E12 требует подписи цели (targetLabel) в модели, ответе и контракте (D-127)"
+    fi
     # Досчёт уходит из транзакции запроса и оставляет видимый признак (`D-087`): признак
     # живёт в `note.matching_pending`, а запуск — в пост-коммитном обработчике, а не в теле
     # транзакции, иначе игрок ждал бы пересчёт и `matching_pending` был бы всегда снят.

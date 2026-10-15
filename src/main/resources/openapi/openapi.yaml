@@ -2697,8 +2697,9 @@ components:
     Note:
       type: object
       description: |
-        Заметка тетради (`§15.1`). Цель — пара «вид + идентификатор» (`D-086`), и она
-        несёт маркер владельца при объединении заметок нескольких персонажей (`D-053`).
+        Заметка тетради (`§15.1`). Цель — пара «вид + идентификатор» (`D-086`) вместе с
+        подписью `targetLabel` (`D-127`): подпись и есть маркер владельца при объединении
+        заметок нескольких персонажей (`D-053`).
       required: [id, gameId, targetKind, targetId, body]
       properties:
         id: { type: string, format: uuid }
@@ -2706,6 +2707,11 @@ components:
         authorMembershipId: { type: string, format: uuid }
         targetKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
         targetId: { type: string, format: uuid }
+        targetLabel:
+          type: [string, 'null']
+          description: |
+            Подпись цели — маркер владельца при объединении заметок нескольких персонажей
+            (`D-053`). Имя берётся живым (`D-127`); для цели-участия подписи нет.
         body: { type: string, description: 'Текст заметки, до 2000 знаков (`D-098`)' }
         matchingPending:
           type: boolean

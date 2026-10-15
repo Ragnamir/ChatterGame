@@ -48,8 +48,17 @@ public record Note(
                 id, gameId, authorMembershipId, target, body, matchingPending, createdAt, updatedAt);
     }
 
-    /** Заметка вместе с её ключами: клиенту они нужны, и второй запрос на это был бы лишним. */
-    public record WithKeywords(Note note, List<NoteKeyword> keywords) {
+    /**
+     * Заметка вместе с её ключами и подписью цели: клиенту нужны и то и другое, и второй
+     * запрос на это был бы лишним.
+     *
+     * <p>`targetLabel` — маркер владельца (`D-053`): у игрока с несколькими персонажами
+     * заметки приходят списком, и имя цели отличает одно замечание от другого. Имя берётся
+     * живым и меняется вместе с карточкой (`D-127`): в отличие от снимка говорящего
+     * (`D-055`), это подпись, а не исторический факт. Для цели-участия подписи нет: мастер
+     * видит свою заметку в собственной панели, и чужого имени там взяться не может.
+     */
+    public record WithKeywords(Note note, List<NoteKeyword> keywords, String targetLabel) {
 
         public boolean hasKeywords() {
             return !keywords.isEmpty();

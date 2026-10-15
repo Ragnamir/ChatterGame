@@ -89,7 +89,7 @@ public class NoteService {
                     Uuids.v7(), note.id(), keyword.raw(), keyword.normalized(), keyword.exactMatch()));
         }
         scheduleBackfill();
-        return new Note.WithKeywords(note, keywords);
+        return new Note.WithKeywords(note, keywords, labelOf(target));
     }
 
     /**
@@ -127,7 +127,7 @@ public class NoteService {
                 note.createdAt(),
                 now);
         scheduleBackfill();
-        return new Note.WithKeywords(updated, notes.keywordsOf(note.id()));
+        return new Note.WithKeywords(updated, notes.keywordsOf(note.id()), labelOf(note.target()));
     }
 
     /**
@@ -147,9 +147,10 @@ public class NoteService {
 
     /**
      * Заметки, видимые смотрящему. Мастер видит всё (`D-054`), игрок — свои и за своих
-     * персонажей, наблюдатель — ничего (`D-063`). Маркер владельца (`D-053`) не отдельное
-     * поле, а цель заметки: клиент уже знает, какими персонажами играет, и по цели
-     * отличает замечание одного персонажа от другого.
+     * персонажей, наблюдатель — ничего (`D-063`). Маркер владельца (`D-053`) — цель заметки
+     * вместе с её подписью (`D-127`): у игрока с несколькими персонажами заметки приходят
+     * списком, и одним идентификатором цели клиент отличил бы их только вторым запросом
+     * за именами.
      */
     @Transactional(readOnly = true)
     public List<Note.WithKeywords> visible(UUID userId, UUID gameId) {
@@ -179,7 +180,8 @@ public class NoteService {
         }
         List<Note.WithKeywords> result = new ArrayList<>();
         for (Note note : gathered.values()) {
-            result.add(new Note.WithKeywords(note, index.get(note.id())));
+            result.add(new Note.WithKeywords(
+                    note, index.get(note.id()), labelOf(note.target())));
         }
         return result;
     }
@@ -222,6 +224,20 @@ public class NoteService {
      * Цель заметки. Мастер целится в любого персонажа игры или в себя (участие), игрок —
      * только в своего персонажа: чужой персонаж — не его знание (`§15.1`).
      */
+    /**
+     * Подпись цели для маркера владельца (`D-053`, `D-127`). Имя персонажа берётся живым:
+     * правка карточки мастером меняет подпись задним числом, и это принято сознательно —
+     * подпись отличает замечания друг от друга, а не фиксирует исторический факт, в отличие
+     * от снимка говорящего у сохранённого сообщения (`D-055`). Для цели-участия подписи нет:
+     * это заметка мастера о себе, и подставлять туда чужое имя неоткуда.
+     */
+    private String labelOf(InboxSubject target) {
+        if (target.kind() != SubjectKind.CHARACTER) {
+            return null;
+        }
+        return characters.findById(target.id()).map(Character::name).orElse(null);
+    }
+
     private InboxSubject resolveTarget(Game game, Membership actor, SubjectKind kind, UUID targetId) {
         if (kind == null || targetId == null) {
             throw ApiException.badRequest("note_target_required", "Укажите цель заметки");

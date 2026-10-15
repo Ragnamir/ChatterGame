@@ -203,6 +203,27 @@ class E12NoteTest extends E02TestSupport {
         assertThat(visible.stream().map(merged -> merged.note().target().id()).toList())
                 .as("маркер владельца — цель заметки: клиент отличает, за кого какая запись (D-053)")
                 .containsExactlyInAnyOrder(fixture.first.characterId, second.id());
+        assertThat(visible.stream().map(Note.WithKeywords::targetLabel).toList())
+                .as("подпись маркера приходит готовой, без второго запроса за именами (D-127)")
+                .containsExactlyInAnyOrder(
+                        nameOf(fixture.first.characterId), second.name());
+    }
+
+    @Test
+    void targetLabelFollowsTheLiveCharacterName() throws Exception {
+        Fixture fixture = runningGame();
+        notes.create(fixture.masterUserId, fixture.gameId, new NoteService.Draft(
+                SubjectKind.CHARACTER, fixture.first.characterId, "за первого",
+                List.of(new NoteService.Draft.Keyword("маяк", false))));
+
+        String renamed = "Переименованный-" + unique("");
+        mutations.updateCharacterCard(fixture.masterUserId, fixture.gameId, fixture.first.characterId,
+                renamed, null, null, null, null, true, false);
+
+        assertThat(notes.visible(fixture.first.userId, fixture.gameId))
+                .as("подпись маркера живая: правка карточки сдвигает её, в отличие от снимка (D-127)")
+                .extracting(Note.WithKeywords::targetLabel)
+                .containsExactly(renamed);
     }
 
     // --- Видимость ---------------------------------------------------------------------
@@ -388,7 +409,11 @@ class E12NoteTest extends E02TestSupport {
 
         var created = call(post("/games/" + fixture.gameId + "/notes"), fixture.first.token, noteBody);
         assertThat(created.getResponse().getStatus()).isEqualTo(201);
-        assertThat(bodyOf(created)).contains("заметка через HTTP").contains("маяк");
+        assertThat(bodyOf(created))
+                .contains("заметка через HTTP")
+                .contains("маяк")
+                .as("подпись маркера владельца отдаётся в ответе (D-053, D-127)")
+                .contains("\"targetLabel\":\"" + nameOf(fixture.first.characterId) + "\"");
 
         var listed = call(get("/games/" + fixture.gameId + "/notes"), fixture.first.token, null);
         assertThat(listed.getResponse().getStatus()).isEqualTo(200);
@@ -418,6 +443,11 @@ class E12NoteTest extends E02TestSupport {
                 .items().stream()
                 .filter(item -> item.messageId() != null)
                 .toList();
+    }
+
+    /** Имя персонажа из БД: подпись маркера сверяется с живой карточкой, а не с константой. */
+    private String nameOf(UUID characterId) {
+        return jdbc.queryForObject("SELECT name FROM character WHERE id = ?", String.class, characterId);
     }
 
     /** Заметка в текущем состоянии БД: нужна досчёту, который читает признак и цель. */
