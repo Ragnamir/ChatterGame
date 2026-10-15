@@ -193,4 +193,46 @@ final class SourceRules {
         return scanner.literals().stream()
                 .anyMatch(literal -> literal.text().contains("game_event"));
     }
+
+    /**
+     * Совпадение ключевых слов считается при записи и в досчёте, но не в read-пути
+     * (`D-050`, `D-087`). Правило выражено через вызывающего, а не через выражение: искать
+     * его в чтении значило бы перебирать условия, а запрет — это свойство пути.
+     *
+     * <p>Файл признаётся read-путём, если объявляет читающую ручку (`@GetMapping`) или
+     * называется `MessageQueryService` — единственный сервис чтения ленты. Совпадение в
+     * таком файле считается нарушением, потому что подсветка уже материализована в
+     * `matched_note_ids`, и пересчёт её на чтении разошёлся бы с записанным.
+     */
+    static List<SourceScanner.Finding> keywordMatchingInReadPath(Path file) throws IOException {
+        SourceScanner scanner = SourceScanner.of(file);
+        boolean matches = scanner.code().contains("KeywordMatcher")
+                || scanner.code().contains("NoteMatchingService");
+        if (!matches) {
+            return List.of();
+        }
+        boolean readPath = scanner.code().contains("@GetMapping")
+                || file.getFileName().toString().equals("MessageQueryService.java");
+        if (!readPath) {
+            return List.of();
+        }
+        return List.of(new SourceScanner.Finding(
+                file, 1, "совпадение ключевых слов в read-пути"));
+    }
+
+    /**
+     * Положительный контроль того же правила: подсветка обязана считаться хоть где-то, иначе
+     * «в read-пути совпадения нет» выполняется на пустом месте. Проверяется отдельно, чтобы
+     * инвариант нельзя было получить молчаливым удалением всей функциональности.
+     */
+    static boolean anyWritePathMatchesKeywords(java.util.List<Path> files) throws IOException {
+        for (Path file : files) {
+            SourceScanner scanner = SourceScanner.of(file);
+            if (scanner.code().contains("KeywordMatcher.matches")
+                    || scanner.code().contains("KeywordMatcher.storedForm")) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

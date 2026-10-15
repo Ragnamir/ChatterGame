@@ -261,8 +261,11 @@ case "$stage" in
       fail=1
       echo "FAIL: E08 требует чтения ленты через inbox_entry (D-030)"
     fi
-    # Отзыв и правка сообщений отсутствуют как API (`D-008`): ни удаления, ни UPDATE.
-    if grep -rnE 'DELETE FROM message|UPDATE message' src/main/java; then
+    # Отзыв и правка сообщений отсутствуют как API (`D-008`): ни удаления, ни правки
+    # содержимого. Запись подсветки заметок (`UPDATE message SET matched_note_ids`) —
+    # это не правка сообщения, а досчёт материала по `D-087`, и адрес провала назван
+    # по содержимому, чтобы правило E08 не ловило законную запись E12.
+    if grep -rnE 'DELETE FROM message|UPDATE message SET body' src/main/java; then
       fail=1
       echo "FAIL: E08 — отзыв и правка сообщений запрещены (D-008)"
     else
@@ -434,6 +437,103 @@ case "$stage" in
       echo "FAIL: E11 — контроллер каналов пишет в БД напрямую вместо GameMutationService"
     else
       echo "  ok: E11 — контроллеры каналов не пишут в доменные таблицы"
+    fi
+    ;;
+  E12)
+    # Подсветка материализуется при записи и в досчёте (`D-050`, `D-087`), а заметка —
+    # мета-слой, не объект мира: проверки адресные, потому что соблазн «посчитать совпадение
+    # на чтении» незаметно превращает `D-030` в фильтрацию и разводит ленту с `inbox_entry`.
+    if [ -f src/main/resources/db/changelog/changes/007-e12.yaml ]; then
+      echo "  ok: E12 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E12 требует changes/007-e12.yaml (superseded-ключи и уникальность снимка)"
+    fi
+    if grep -q '007-e12.yaml' src/main/resources/contract/changelog-manifest.txt; then
+      echo "  ok: E12 — отпечаток миграции внесён в манифест"
+    else
+      fail=1
+      echo "FAIL: E12 требует отпечаток 007-e12.yaml в changelog-manifest.txt"
+    fi
+    # Ключ заметки при правке помечается, а не удаляется: `note_keyword` — доменная строка,
+    # и физическое удаление запрещено глобальным инвариантом (`D-010`).
+    if grep -rq 'superseded' src/main/resources/db/changelog/changes/007-e12.yaml; then
+      echo "  ok: E12 — ключи заметок помечаются, а не удаляются (D-010)"
+    else
+      fail=1
+      echo "FAIL: E12 требует пометки superseded вместо удаления ключей (D-010)"
+    fi
+    # Совпадение ключей считается при записи (`D-050`): без вызова в пути записи сообщения
+    # подсветка появлялась бы только досчётом, то есть с задержкой и не для новых реплик.
+    if grep -rq 'NoteMatchingService' src/main/java/com/chattergame/message/MessageService.java; then
+      echo "  ok: E12 — подсветка считается при записи сообщения (D-050)"
+    else
+      fail=1
+      echo "FAIL: E12 требует вычисления подсветки в пути записи сообщения (D-050)"
+    fi
+    # Материализованная подсветка читается из строки, а не пересчитывается на чтении (`D-050`).
+    if grep -rq 'matchedNoteIds' src/main/java/com/chattergame/web/message/MessageView.java; then
+      echo "  ok: E12 — подсветка отдаётся клиенту готовой"
+    else
+      fail=1
+      echo "FAIL: E12 требует matchedNoteIds в ответе ленты (D-050)"
+    fi
+    # Режим точного совпадения для имён в модели с первого дня (`D-051`): без него тёзкин
+    # падеж ловится леммой, и заметка светит на чужого человека.
+    if grep -rq 'exactMatch' src/main/java/com/chattergame/note/KeywordMatcher.java; then
+      echo "  ok: E12 — флаг точного совпадения для имён на месте (D-051)"
+    else
+      fail=1
+      echo "FAIL: E12 требует флага точного совпадения для имён (D-051)"
+    fi
+    # Досчёт уходит из транзакции запроса и оставляет видимый признак (`D-087`): признак
+    # живёт в `note.matching_pending`, а запуск — в пост-коммитном обработчике, а не в теле
+    # транзакции, иначе игрок ждал бы пересчёт и `matching_pending` был бы всегда снят.
+    if grep -rq 'matching_pending' src/main/java/com/chattergame/note \
+      && grep -rq 'afterCommit' src/main/java/com/chattergame/note/NoteService.java; then
+      echo "  ok: E12 — досчёт запускается после коммита и виден по признаку (D-087)"
+    else
+      fail=1
+      echo "FAIL: E12 требует асинхронного досчёта с признаком matching_pending (D-087)"
+    fi
+    # Область досчёта ограничена `inbox_entry` субъекта: пересчёт по всей игре был бы
+    # миллионами строк и обошёл бы материализованную видимость (`D-030`, `D-087`).
+    if grep -rq 'inbox_entry' src/main/java/com/chattergame/message/MessageRepository.java; then
+      echo "  ok: E12 — область досчёта идёт по inbox_entry (D-030, D-087)"
+    else
+      fail=1
+      echo "FAIL: E12 требует ограничения досчёта материалом inbox_entry (D-087)"
+    fi
+    # Сохранённое сообщение — снимок, а не живая ссылка (`D-055`): читать имя из карточки
+    # значило бы менять запись задним числом при правке персонажа мастером.
+    if grep -rq 'speakerSnapshot' src/main/java/com/chattergame/note/SavedMessage.java; then
+      echo "  ok: E12 — сохранённое сообщение хранит снимок говорящего (D-055)"
+    else
+      fail=1
+      echo "FAIL: E12 требует снимка текста и говорящего у сохранённого сообщения (D-055)"
+    fi
+    # Мастер видит заметки игроков (`D-054`), наблюдателю заметок нет вовсе (`D-063`).
+    if grep -rq 'MembershipRole.MASTER' src/main/java/com/chattergame/note/NoteService.java \
+      && grep -rq 'notes_not_for_observer' src/main/java/com/chattergame/note/NoteService.java; then
+      echo "  ok: E12 — видимость заметок: мастеру всё, наблюдателю ничего (D-054, D-063)"
+    else
+      fail=1
+      echo "FAIL: E12 требует видимости заметок по D-054 и D-063"
+    fi
+    # Веб-слой: заметки и сохранённые сообщения.
+    if grep -rq '"/notes"' src/main/java/com/chattergame/web/note/NoteController.java \
+      && grep -rq '"/saved-messages"' src/main/java/com/chattergame/web/note/NoteController.java; then
+      echo "  ok: E12 — веб-слой тетради на месте"
+    else
+      fail=1
+      echo "FAIL: E12 требует эндпоинты заметок и сохранённых сообщений"
+    fi
+    # Контроллеры не пишут в доменные таблицы (`D-034`): тетрадь живёт в сервисах.
+    if grep -rnE 'jdbc\.(update|execute)\(' src/main/java/com/chattergame/web/note >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E12 — контроллер тетради пишет в БД напрямую вместо сервиса"
+    else
+      echo "  ok: E12 — контроллер тетради не пишет в доменные таблицы"
     fi
     ;;
   *)

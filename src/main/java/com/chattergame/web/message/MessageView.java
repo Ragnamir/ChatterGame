@@ -3,6 +3,7 @@ package com.chattergame.web.message;
 import com.chattergame.message.FeedItem;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -20,7 +21,8 @@ public record MessageView(
         String body,
         String systemCode,
         Map<String, Object> payload,
-        Instant createdAt) {
+        Instant createdAt,
+        List<UUID> matchedNoteIds) {
 
     public static MessageView of(FeedItem item) {
         return new MessageView(
@@ -36,6 +38,7 @@ public record MessageView(
                 item.body(),
                 item.systemCode(),
                 item.payload(),
-                item.createdAt());
+                item.createdAt(),
+                item.matchedNoteIds());
     }
 }

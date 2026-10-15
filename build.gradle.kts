@@ -43,6 +43,11 @@ dependencies {
     // `LISTEN/NOTIFY` и разбирает уведомления через `PGConnection` (`D-084`). Тот же драйвер,
     // не новая зависимость — меняется только видимость на компиляции.
     implementation("org.postgresql:postgresql")
+    // Лемматизация ключей заметок по-русски (Snowball, `D-051`, `REQUIREMENTS §15.1`).
+    // Берём готовую реализацию стеммера, а не свою: самодельный Snowball для русского
+    // расходится с эталоном на падежных формах и даёт пропущенные подсветки (`D-051`).
+    // Нужен только `RussianStemmer`, а он живёт в `lucene-analysis-common` вместе с ядром.
+    implementation("org.apache.lucene:lucene-analysis-common:9.12.2")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation(platform("org.testcontainers:testcontainers-bom:1.21.4"))

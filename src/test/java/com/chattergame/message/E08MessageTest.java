@@ -215,9 +215,11 @@ class E08MessageTest extends E02TestSupport {
                     .filter(path -> {
                         try {
                             String code = Files.readString(path, java.nio.charset.StandardCharsets.UTF_8);
+                            // `matched_note_ids` — досчёт подсветки заметок (`D-087`), а не
+                            // правка содержимого: сообщение остаётся неизменным (`D-008`).
                             return code.contains("@DeleteMapping")
                                     || code.contains("@PatchMapping")
-                                    || code.contains("UPDATE message")
+                                    || code.contains("UPDATE message SET body")
                                     || code.contains("DELETE FROM message");
                         } catch (IOException e) {
                             throw new IllegalStateException(e);
@@ -226,7 +228,7 @@ class E08MessageTest extends E02TestSupport {
                     .map(Path::toString)
                     .toList();
             assertThat(offenders)
-                    .as("отзыв и правка сообщений отсутствуют как API (D-008)")
+                    .as("отзыв и правка содержимого сообщений отсутствуют как API (D-008)")
                     .isEmpty();
         }
     }

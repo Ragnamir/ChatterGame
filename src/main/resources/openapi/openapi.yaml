@@ -1577,6 +1577,167 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/notes:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Заметки тетради
+      description: |
+        Заметки — мета-слой персонажа (`§15.1`). Мастер видит заметки всех игроков (`D-054`),
+        игрок — только свои и за своих персонажей, наблюдателю заметок нет вовсе (`D-063`).
+        Подсветка сообщений считается при записи (`D-050`) и лежит в `matchedNoteIds` строки.
+      operationId: listNotes
+      tags: [note]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Заметки, видимые смотрящему
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Note' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Создание заметки
+      description: |
+        До десяти ключей на заметку, тело до 2000 знаков (`D-098`). Ключ сравнивается по
+        лемме и границе слова, имя — точно (`D-051`); нормализация по `D-080`. Составление
+        вызывает асинхронный досчёт подсветки (`D-087`): заметка сразу отдаётся с
+        `matchingPending`, а подсветка появляется после пересчёта.
+      operationId: createNote
+      tags: [note]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NoteRequest' }
+      responses:
+        '201':
+          description: Заметка создана
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/notes/{noteId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: noteId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      summary: Правка заметки
+      description: |
+        Правит только автор: мастер видит заметки игроков (`D-054`), но переписать чужое
+        замечание не вправе. Цель правкой не меняется. Ключи задаются целиком, старые
+        помечаются `superseded` (`D-010`), и запускается досчёт подсветки (`D-087`).
+      operationId: updateNote
+      tags: [note]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NoteRequest' }
+      responses:
+        '200':
+          description: Заметка обновлена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/saved-messages:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Сохранённые сообщения тетради
+      description: |
+        Записи принадлежат участию (`D-055`), поэтому смена персонажа их не теряет, а
+        наблюдатель пользуется тетрадью наравне с игроком (`D-063`). Видны только свои.
+      operationId: listSavedMessages
+      tags: [note]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Сохранённые сообщения смотрящего
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SavedMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Сохранение сообщения в тетрадь
+      description: |
+        Снимок текста и имени говорящего берётся в момент сохранения (`D-055`). Сохранить
+        можно только то, что субъекту выдали в ленте (`D-030`). Повтор того же сообщения
+        уточняет комментарий, а не создаёт вторую запись.
+      operationId: saveMessage
+      tags: [note]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveMessageRequest' }
+      responses:
+        '201':
+          description: Сообщение сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedMessage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/saved-messages/{savedId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: savedId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      summary: Правка комментария сохранённого сообщения
+      description: |
+        Меняется только комментарий: снимок текста и имени неподвижен (`D-055`).
+        Правит только владелец записи.
+      operationId: commentSavedMessage
+      tags: [note]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommentRequest' }
+      responses:
+        '200':
+          description: Комментарий обновлён
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedMessage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /games/{id}/assets:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -2478,6 +2639,10 @@ components:
         systemCode: { type: [string, 'null'], description: 'Ключ интернализации системного события' }
         payload: { type: [object, 'null'] }
         createdAt: { type: string, format: date-time }
+        matchedNoteIds:
+          type: array
+          description: 'Заметки, подсвечивающие строку, посчитанные при записи (`D-050`)'
+          items: { type: string, format: uuid }
     Feed:
       type: object
       required: [items, lastSeq, readSeq, chatKind]
@@ -2521,6 +2686,73 @@ components:
             properties:
               chatId: { type: string, format: uuid }
               count: { type: integer, format: int64 }
+    NoteKeyword:
+      type: object
+      description: 'Ключ заметки: слово и признак точного совпадения (`D-051`)'
+      required: [raw, exactMatch]
+      properties:
+        id: { type: [string, 'null'], format: uuid }
+        raw: { type: string, description: 'Слово как его набрал автор' }
+        exactMatch: { type: boolean, description: 'Сравнивать целиком — режим имени (`D-051`)' }
+    Note:
+      type: object
+      description: |
+        Заметка тетради (`§15.1`). Цель — пара «вид + идентификатор» (`D-086`), и она
+        несёт маркер владельца при объединении заметок нескольких персонажей (`D-053`).
+      required: [id, gameId, targetKind, targetId, body]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        authorMembershipId: { type: string, format: uuid }
+        targetKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        targetId: { type: string, format: uuid }
+        body: { type: string, description: 'Текст заметки, до 2000 знаков (`D-098`)' }
+        matchingPending:
+          type: boolean
+          description: 'Подсветка ещё досчитывается (`D-087`)'
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        keywords:
+          type: array
+          items: { $ref: '#/components/schemas/NoteKeyword' }
+    NoteRequest:
+      type: object
+      required: [targetKind, targetId, body]
+      properties:
+        targetKind: { type: string, enum: [CHARACTER, MEMBERSHIP] }
+        targetId: { type: string, format: uuid }
+        body: { type: string, description: 'Текст заметки, до 2000 знаков (`D-098`)' }
+        keywords:
+          type: array
+          description: 'До десяти ключей на заметку (`D-098`)'
+          items: { $ref: '#/components/schemas/NoteKeyword' }
+    SavedMessage:
+      type: object
+      description: |
+        Сохранённое сообщение тетради (`§15.2`). Принадлежит участию (`D-055`), поэтому
+        смена персонажа записей не теряет; снимок защищает текст от правки задним числом.
+      required: [id, gameId, ownerMembershipId, messageId]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        ownerMembershipId: { type: string, format: uuid }
+        messageId: { type: string, format: uuid }
+        textSnapshot: { type: [string, 'null'], description: 'Тело на момент сохранения (`D-055`)' }
+        speakerSnapshot: { type: [string, 'null'], description: 'Имя говорящего на момент сохранения' }
+        comment: { type: [string, 'null'] }
+        noteId: { type: [string, 'null'], format: uuid }
+        createdAt: { type: string, format: date-time }
+    SaveMessageRequest:
+      type: object
+      required: [messageId]
+      properties:
+        messageId: { type: string, format: uuid }
+        comment: { type: [string, 'null'] }
+        noteId: { type: [string, 'null'], format: uuid }
+    CommentRequest:
+      type: object
+      properties:
+        comment: { type: [string, 'null'] }
     RestrictionKind:
       type: string
       description: '`NO_JOKE` адресуется участию, остальные — персонажу (`D-099`)'

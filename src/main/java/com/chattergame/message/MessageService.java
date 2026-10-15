@@ -14,6 +14,7 @@ import com.chattergame.game.Membership;
 import com.chattergame.game.MembershipRepository;
 import com.chattergame.journal.GameEventType;
 import com.chattergame.journal.Payloads;
+import com.chattergame.note.NoteMatchingService;
 import com.chattergame.turn.TurnService;
 import com.chattergame.util.ApiException;
 import com.chattergame.util.Uuids;
@@ -22,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -51,6 +54,7 @@ public class MessageService {
     private final PresenceRepository presence;
     private final Payloads payloads;
     private final TurnService turns;
+    private final NoteMatchingService notes;
 
     public MessageService(
             MessageRepository messages,
@@ -64,7 +68,8 @@ public class MessageService {
             CharacterRepository characters,
             PresenceRepository presence,
             Payloads payloads,
-            TurnService turns) {
+            TurnService turns,
+            NoteMatchingService notes) {
         this.messages = messages;
         this.cursors = cursors;
         this.postings = postings;
@@ -77,6 +82,7 @@ public class MessageService {
         this.presence = presence;
         this.payloads = payloads;
         this.turns = turns;
+        this.notes = notes;
     }
 
     /**
@@ -107,6 +113,17 @@ public class MessageService {
 
         Game game = games.findById(gameId).orElseThrow();
         boolean hidden = hiddenAuthor(characterId);
+        // Подсветка считается до записи и по тем же получателям, кому материализуется
+        // видимость (`D-050`): заметка адресована субъекту, а не чату, поэтому «кому
+        // видно сообщение» и «чья заметка его подсвечивает» — один и тот же набор.
+        LinkedHashSet<InboxSubject> recipients = inbox.recipientsForPost(
+                game,
+                chatId,
+                userId,
+                characterId,
+                hidden,
+                kind == MessageKind.JOKE);
+        List<UUID> matchedNotes = notes.matched(gameId, recipients, body);
         Map<String, Object> payload = new LinkedHashMap<>();
         if (hidden) {
             payload.put("hiddenAuthor", true);
@@ -131,7 +148,8 @@ public class MessageService {
                 onBehalfOfMaster,
                 body == null ? null : body.strip(),
                 payload,
-                Instant.now());
+                Instant.now(),
+                matchedNotes);
 
         long seq = mutations.appendEvent(
                 gameId,
@@ -144,15 +162,7 @@ public class MessageService {
 
         Message stored = withSeq(message, seq);
         messages.insert(stored);
-        inbox.materializePost(
-                game,
-                chatId,
-                seq,
-                stored.id(),
-                userId,
-                characterId,
-                hidden,
-                kind == MessageKind.JOKE);
+        inbox.materializePost(recipients, chatId, seq, stored.id());
         return stored;
     }
 
@@ -262,7 +272,8 @@ public class MessageService {
                 message.onBehalfOfMaster(),
                 message.body(),
                 message.payload(),
-                message.createdAt());
+                message.createdAt(),
+                message.matchedNoteIds());
     }
 
     /** Скрытность берётся у активного присутствия автора: она состояние присутствия, не карточки. */

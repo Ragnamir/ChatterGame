@@ -11,3 +11,5 @@ databaseChangeLog:
       file: db/changelog/changes/005-e08.yaml
   - include:
       file: db/changelog/changes/006-e11.yaml
+  - include:
+      file: db/changelog/changes/007-e12.yaml

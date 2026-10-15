@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Сборка и разбор `payload` события. Живёт отдельно, потому что сериализация нужна и на
@@ -19,6 +21,9 @@ import java.util.Map;
 public class Payloads {
 
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {
+    };
+
+    private static final TypeReference<List<UUID>> NOTE_IDS = new TypeReference<>() {
     };
 
     private final ObjectMapper objectMapper;
@@ -47,6 +52,32 @@ public class Payloads {
             return objectMapper.readValue(json, MAP);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Не удалось разобрать payload события", e);
+        }
+    }
+
+    /**
+     * Список идентификаторов заметок в колонку `message.matched_note_ids` (`D-050`).
+     * Массив, а не объект: у него нет полей, и `payload`-формат здесь был бы лишним слоем.
+     * `null` и пустой список пишутся одинаково — пустым массивом, потому что «нет подсветок»
+     * и «поле не заполнено» для читателя одно и то же.
+     */
+    public String writeNoteIds(java.util.List<UUID> noteIds) {
+        try {
+            return objectMapper.writeValueAsString(noteIds == null ? List.of() : noteIds);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Не удалось собрать matched_note_ids", e);
+        }
+    }
+
+    /** Разбор `matched_note_ids`: список идентификаторов заметок, подсвечивающих сообщение. */
+    public List<UUID> readNoteIds(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json, NOTE_IDS);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Не удалось разобрать matched_note_ids", e);
         }
     }
 }

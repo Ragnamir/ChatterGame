@@ -1,0 +1,49 @@
+databaseChangeLog:
+  # E12: тетрадь — заметки с ключевыми словами и сохранённые сообщения.
+  # Применённые `001-baseline.yaml` … `006-e11.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Сами таблицы заведены в baseline: `note`, `note_keyword`, `saved_message` объявлены там
+  # вместе с колонкой `message.matched_note_ids`, потому что модель данных проверялась до
+  # появления кода (прецеденты `D-103`, E10). Этап добавляет к ним три вещи, без которых
+  # данные разъезжаются, — и только их: переписывать применённый baseline нельзя.
+  #
+  # 1. Ключ заметки при правке не удаляется, а помечается `superseded` (`D-010`). Состав
+  #    ключей на правке задаётся целиком, но `note_keyword` — доменная строка, и `DELETE`
+  #    по ней запрещён глобальным инвариантом. Пометка даёт «ключ больше не действует» без
+  #    потери строки, а фильтр `NOT superseded` возвращает ту же выборку, что была.
+  # 2. Действующий ключ уникален в пределах заметки: «козлоногий» рядом с «Козлоногий» —
+  #    это дубль, а не конфликт ключей (`D-052`). Конфликт — две разные заметки на одно
+  #    слово, и он живёт на уровне `note`.
+  # 3. Сообщение сохраняется в тетрадь один раз на участие: повтор — тот же снимок,
+  #    а не второй (`D-055`).
+
+  - changeSet:
+      id: 007-01-note-keyword-superseded
+      author: e12
+      changes:
+        - addColumn:
+            tableName: note_keyword
+            columns:
+              - column:
+                  name: superseded
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints: { nullable: false }
+
+  - changeSet:
+      id: 007-02-note-keyword-unique
+      author: e12
+      changes:
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_note_keyword_active ON note_keyword (note_id, normalized, exact_match) WHERE NOT superseded
+            rollback: DROP INDEX ux_note_keyword_active
+
+  - changeSet:
+      id: 007-03-saved-message-unique
+      author: e12
+      changes:
+        # Частичный индекс: снимок без ссылки на сообщение (`message_id IS NULL`) — это
+        # запись, сделанная вручную, и такие строки не обязаны быть уникальными.
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_saved_message_owner_message ON saved_message (owner_membership_id, message_id) WHERE message_id IS NOT NULL
+            rollback: DROP INDEX ux_saved_message_owner_message

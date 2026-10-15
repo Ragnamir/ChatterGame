@@ -1,6 +1,7 @@
 package com.chattergame.message;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -16,7 +17,9 @@ import java.util.UUID;
  * оно лежит.
  *
  * <p>Отзыв сообщения невозможен (`D-008`), поэтому здесь нет ни правки, ни удаления:
- * строка пишется один раз и живёт как есть.
+ * строка пишется один раз и живёт как есть. Исключение — `matchedNoteIds`: подсветка
+ * ключей заметок досчитывается назад при создании и правке заметки (`D-087`), и это
+ * запись, а не правка текста. Само тело сообщения не меняется никогда.
  */
 public record Message(
         UUID id,
@@ -30,8 +33,38 @@ public record Message(
         boolean onBehalfOfMaster,
         String body,
         Map<String, Object> payload,
-        Instant createdAt) {
+        Instant createdAt,
+        List<UUID> matchedNoteIds) {
 
     /** Максимум колонки `message.body` и лимит требования (`D-098`). */
     public static final int BODY_MAX = 4000;
+
+    public Message(
+            UUID id,
+            UUID gameId,
+            UUID chatId,
+            long seq,
+            MessageKind kind,
+            UUID characterId,
+            UUID authorMembershipId,
+            UUID authorUserId,
+            boolean onBehalfOfMaster,
+            String body,
+            Map<String, Object> payload,
+            Instant createdAt) {
+        this(
+                id,
+                gameId,
+                chatId,
+                seq,
+                kind,
+                characterId,
+                authorMembershipId,
+                authorUserId,
+                onBehalfOfMaster,
+                body,
+                payload,
+                createdAt,
+                List.of());
+    }
 }

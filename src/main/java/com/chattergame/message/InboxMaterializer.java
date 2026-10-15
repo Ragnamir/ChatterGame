@@ -65,7 +65,11 @@ public class InboxMaterializer {
     }
 
     /**
-     * Записывает строки `inbox_entry` на сообщение.
+     * Записывает строки `inbox_entry` на сообщение, вычисляя получателей на месте (`D-030`).
+     *
+     * <p>Оставлена для вызовов, которым подсветка заметок не нужна и которым получатели
+     * больше нигде не требуются. Путь записи сообщения получателей считает сам — чтобы
+     * те же субъекты выбрали заметки для подсветки (`D-050`), — и зовёт перегрузку ниже.
      *
      * @param requesterUserId спрашивающий: он получает строку всегда, даже если он скрыт —
      *     иначе автор не увидит собственного сообщения в ленте
@@ -81,6 +85,27 @@ public class InboxMaterializer {
             UUID chatId,
             long eventSeq,
             UUID messageId,
+            UUID requesterUserId,
+            UUID characterId,
+            boolean hiddenAuthor,
+            boolean addressOccupants) {
+        materializePost(
+                recipientsForPost(game, chatId, requesterUserId, characterId, hiddenAuthor, addressOccupants),
+                chatId,
+                eventSeq,
+                messageId);
+    }
+
+    /**
+     * Получатели сообщения без записи строк. Отдельный метод потому, что подсветка ключей
+     * заметок считается при записи (`D-050`) по тем же субъектам, которым материализуется
+     * видимость: заметка целится в субъекта (`§15.1`), и «кому адресовано» — одна и та же
+     * функция для строк ленты и для подсветки. Разойдись они, подсветка появлялась бы там,
+     * где заметки нет, и наоборот.
+     */
+    public LinkedHashSet<InboxSubject> recipientsForPost(
+            Game game,
+            UUID chatId,
             UUID requesterUserId,
             UUID characterId,
             boolean hiddenAuthor,
@@ -104,6 +129,12 @@ public class InboxMaterializer {
         if (visibleTo(Viewer.OBSERVER, kind, hiddenAuthor)) {
             subjects.addAll(observers(game));
         }
+        return subjects;
+    }
+
+    /** Запись уже посчитанных получателей: второй расчёт тех же субъектов был бы дороже кода. */
+    public void materializePost(
+            LinkedHashSet<InboxSubject> subjects, UUID chatId, long eventSeq, UUID messageId) {
         insertAll(subjects, chatId, eventSeq, messageId);
     }
 

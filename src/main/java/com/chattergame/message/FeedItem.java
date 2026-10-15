@@ -11,6 +11,10 @@ import java.util.UUID;
  * и разделять ленту на два списка значило бы заставлять клиента склеивать её самому.
  * У системной строки пусты `messageId` и `body`, зато заполнен `systemCode`: текст
  * переводится клиентом по ключу интернализации, а не приходит с сервера (`D-081`).
+ *
+ * <p>`matchedNoteIds` — заметки, подсвечивающие эту строку (`D-050`). Список приходит
+ * готовым, а не считается на чтении, и клиент лишь фильтрует его по живым заметкам и
+ * своим правам (`D-052`, `D-087`).
  */
 public record FeedItem(
         long seq,
@@ -25,7 +29,8 @@ public record FeedItem(
         String body,
         String systemCode,
         Map<String, Object> payload,
-        Instant createdAt) {
+        Instant createdAt,
+        java.util.List<UUID> matchedNoteIds) {
 
     public static FeedItem of(Message message) {
         Object hidden = message.payload() == null ? null : message.payload().get("hiddenAuthor");
@@ -42,12 +47,13 @@ public record FeedItem(
                 message.body(),
                 null,
                 message.payload(),
-                message.createdAt());
+                message.createdAt(),
+                message.matchedNoteIds());
     }
 
     public static FeedItem system(long seq, UUID chatId, String code, Map<String, Object> payload, Instant at) {
         return new FeedItem(
                 seq, MessageKind.SYSTEM, null, chatId, null, null, null, false, false,
-                null, code, payload, at);
+                null, code, payload, at, java.util.List.of());
     }
 }

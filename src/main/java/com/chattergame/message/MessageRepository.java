@@ -28,12 +28,13 @@ public class MessageRepository {
 
     private static final String COLUMNS =
             "id, game_id, chat_id, seq, kind, character_id, author_membership_id, author_user_id, "
-                    + "on_behalf_of_master, body, payload, created_at";
+                    + "on_behalf_of_master, body, payload, created_at, matched_note_ids";
 
     /** Колонки, читаемые из `message` в ленте: без них разбор идёт двумя запросами на строку. */
     private static final String FEED_COLUMNS =
             "m.id, m.game_id, m.chat_id, m.seq, m.kind, m.character_id, m.author_membership_id, "
-                    + "m.author_user_id, m.on_behalf_of_master, m.body, m.payload, m.created_at";
+                    + "m.author_user_id, m.on_behalf_of_master, m.body, m.payload, m.created_at, "
+                    + "m.matched_note_ids";
 
     private final JdbcTemplate jdbc;
     private final Payloads payloads;
@@ -46,8 +47,9 @@ public class MessageRepository {
     public void insert(Message message) {
         jdbc.update(
                 "INSERT INTO message (id, game_id, chat_id, seq, kind, character_id, "
-                        + "author_membership_id, author_user_id, on_behalf_of_master, body, payload) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)",
+                        + "author_membership_id, author_user_id, on_behalf_of_master, body, payload, "
+                        + "matched_note_ids) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb)",
                 message.id(),
                 message.gameId(),
                 message.chatId(),
@@ -58,7 +60,67 @@ public class MessageRepository {
                 message.authorUserId(),
                 message.onBehalfOfMaster(),
                 message.body(),
-                payloads.write(message.payload()));
+                payloads.write(message.payload()),
+                payloads.writeNoteIds(message.matchedNoteIds()));
+    }
+
+    /**
+     * Строки досчёта (`D-087`): сообщения субъекта вместе с уже стоящими у них подсветками.
+     * Область ограничена `inbox_entry` одного субъекта, а не всеми сообщениями игры: десятки
+     * тысяч строк вместо миллионов. Текущий список читается здесь же — по нему видно, надо
+     * ли вообще писать: при пересчёте правки чаще всего ничего не меняется.
+     */
+    public List<NoteMatchRow> feedForMatching(InboxSubject subject) {
+        return jdbc.query(
+                "SELECT i.event_seq, m.id AS message_id, m.body AS body, "
+                        + "m.matched_note_ids AS matched_note_ids "
+                        + "FROM inbox_entry i JOIN message m ON m.id = i.message_id "
+                        + "WHERE i.subject_kind = ? AND i.subject_id = ? "
+                        + "ORDER BY i.event_seq",
+                (rs, rowNum) -> new NoteMatchRow(
+                        rs.getLong("event_seq"),
+                        rs.getObject("message_id", UUID.class),
+                        rs.getString("body"),
+                        payloads.readNoteIds(rs.getString("matched_note_ids"))),
+                subject.kind().name(),
+                subject.id());
+    }
+
+    /**
+     * Ставит или снимает подсветку одной заметки у одного сообщения. Снятие обязательно:
+     * правка заметки может убрать ключ, и без снятия сообщение осталось бы подсвеченным
+     * заметкой, которой это уже не касается. Запись идёт только при расхождении, иначе
+     * досчёт писал бы десятки тысяч строк в стол, ничего не меняя.
+     *
+     * <p>Добавление идемпотентно на уровне условия `NOT ... @>`: один и тот же досчёт
+     * может идти и от правки заметки, и от планового обхода, и без этой проверки две
+     * встречные транзакции добавили бы один идентификатор дважды.
+     */
+    public void setMatchedNote(UUID messageId, UUID noteId, boolean matchedNow, boolean matchedBefore) {
+        if (matchedNow == matchedBefore) {
+            return;
+        }
+        if (matchedNow) {
+            jdbc.update(
+                    "UPDATE message "
+                            + "SET matched_note_ids = coalesce(matched_note_ids, '[]'::jsonb) "
+                            + "|| to_jsonb(?::text) "
+                            + "WHERE id = ? AND NOT (coalesce(matched_note_ids, '[]'::jsonb) "
+                            + "@> to_jsonb(?::text))",
+                    noteId.toString(),
+                    messageId,
+                    noteId.toString());
+            return;
+        }
+        jdbc.update(
+                "UPDATE message SET matched_note_ids = coalesce(matched_note_ids, '[]'::jsonb) "
+                        + "- ?::text WHERE id = ?",
+                noteId.toString(),
+                messageId);
+    }
+
+    /** Строка досчёта: сообщение, его тело и список уже стоящих подсветок. */
+    public record NoteMatchRow(long eventSeq, UUID messageId, String body, List<UUID> matchedNoteIds) {
     }
 
     /**
@@ -110,6 +172,7 @@ public class MessageRepository {
                 "SELECT i.event_seq, i.chat_id, m.id AS message_id, m.kind AS message_kind, "
                         + "m.character_id, m.author_membership_id, m.author_user_id, "
                         + "m.on_behalf_of_master, m.body, m.payload AS message_payload, "
+                        + "m.matched_note_ids AS matched_note_ids, "
                         + "e.type AS event_type, e.payload AS event_payload, "
                         + "coalesce(m.created_at, e.created_at) AS created_at "
                         + "FROM inbox_entry i "
@@ -141,7 +204,8 @@ public class MessageRepository {
                     rs.getBoolean("on_behalf_of_master"),
                     rs.getString("body"),
                     payloads.read(rs.getString("message_payload")),
-                    rs.getTimestamp("created_at").toInstant()));
+                    rs.getTimestamp("created_at").toInstant(),
+                    payloads.readNoteIds(rs.getString("matched_note_ids"))));
         }
         return FeedItem.system(
                 rs.getLong("event_seq"),
@@ -191,6 +255,7 @@ public class MessageRepository {
                 "SELECT i.event_seq, i.chat_id, m.id AS message_id, m.kind AS message_kind, "
                         + "m.character_id, m.author_membership_id, m.author_user_id, "
                         + "m.on_behalf_of_master, m.body, m.payload AS message_payload, "
+                        + "m.matched_note_ids AS matched_note_ids, "
                         + "e.type AS event_type, e.payload AS event_payload, "
                         + "coalesce(m.created_at, e.created_at) AS created_at "
                         + "FROM inbox_entry i "
@@ -235,6 +300,7 @@ public class MessageRepository {
                 rs.getBoolean(p + "on_behalf_of_master"),
                 rs.getString(p + "body"),
                 payloads.read(rs.getString(p + "payload")),
-                rs.getTimestamp(p + "created_at").toInstant());
+                rs.getTimestamp(p + "created_at").toInstant(),
+                payloads.readNoteIds(rs.getString(p + "matched_note_ids")));
     }
 }

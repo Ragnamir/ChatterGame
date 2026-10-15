@@ -77,6 +77,56 @@ class E01InvariantsTest {
                 .isEmpty();
     }
 
+    /**
+     * Совпадение ключевых слов считается при записи и в досчёте, но не в read-пути
+     * (`D-050`, `D-087`). Проверка парная: отрицательная — что в чтении совпадения нет,
+     * положительная — что оно вообще где-то считается. Одной отрицательной мало: она
+     * зелёная и на молчаливо удалённой подсветке, то есть пропускает ровно тот отказ,
+     * который должна ловить (`E12`, критерий приёмки).
+     */
+    @Test
+    void keywordMatchingNeverHappensInReadPath() throws IOException {
+        List<Path> sources = SourceScanner.javaFiles(MAIN_SOURCES);
+
+        assertThat(scan(SourceRules::keywordMatchingInReadPath))
+                .as("в read-пути совпадение ключевых слов не вычисляется (D-050)")
+                .isEmpty();
+        assertThat(SourceRules.anyWritePathMatchesKeywords(sources))
+                .as("подсветка обязана считаться в пути записи, иначе предыдущая проверка пуста")
+                .isTrue();
+    }
+
+    @Test
+    void ruleDetectsKeywordMatchingInAReadHandler() throws IOException {
+        Path file = source("""
+                class Bad {
+                    @GetMapping("/notes")
+                    List<String> read(String body) {
+                        return List.of(KeywordMatcher.matches("ключ", false, body) ? "x" : "y");
+                    }
+                }
+                """);
+
+        assertThat(SourceRules.keywordMatchingInReadPath(file))
+                .as("правило обязано краснеть на синтетическом чтении")
+                .hasSize(1);
+    }
+
+    @Test
+    void ruleAllowsKeywordMatchingInTheWritePath() throws IOException {
+        Path file = source("""
+                class Fine {
+                    void write(String body) {
+                        boolean hit = KeywordMatcher.matches("ключ", false, body);
+                    }
+                }
+                """);
+
+        assertThat(SourceRules.keywordMatchingInReadPath(file))
+                .as("совпадение в пути записи — законно (D-050)")
+                .isEmpty();
+    }
+
     @Test
     void messageHandlersCheckPermissionsPerEvent() throws IOException {
         List<String> findings = scan(SourceRules::messageHandlersWithoutPermissionCheck);

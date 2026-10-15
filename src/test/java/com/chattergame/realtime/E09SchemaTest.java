@@ -118,6 +118,7 @@ class E09SchemaTest extends E09TestSupport {
                 "Тело реплики",
                 null,
                 payload,
-                Instant.parse("2026-10-13T09:00:00Z"));
+                Instant.parse("2026-10-13T09:00:00Z"),
+                List.of());
     }
 }
