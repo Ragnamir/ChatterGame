@@ -58,6 +58,8 @@ public final class SystemProjection {
         CODES.put(GameEventType.RESTRICTION_REVOKED, "restriction_revoked");
         CODES.put(GameEventType.TURN_OPENED, "turn_opened");
         CODES.put(GameEventType.TURN_CLOSED, "turn_closed");
+        CODES.put(GameEventType.CHARACTER_OCCUPIED, "character_occupied");
+        CODES.put(GameEventType.CHARACTER_RELEASED, "character_released");
         CODES.put(GameEventType.GAME_STARTED, "game_started");
         CODES.put(GameEventType.GAME_FINISHED, "game_finished");
         CODES.put(GameEventType.GAME_PAUSED, "game_paused");

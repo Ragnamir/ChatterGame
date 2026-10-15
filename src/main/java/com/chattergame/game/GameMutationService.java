@@ -35,6 +35,7 @@ import com.chattergame.realtime.RealtimeEvents;
 import com.chattergame.message.InboxSubject;
 import com.chattergame.message.SubjectKind;
 import com.chattergame.message.SystemProjection;
+import com.chattergame.message.VisibilityBackfillExecutor;
 import com.chattergame.restriction.Restriction;
 import com.chattergame.restriction.RestrictionKind;
 import com.chattergame.restriction.RestrictionRepository;
@@ -103,6 +104,7 @@ public class GameMutationService {
     private final RealtimeEvents realtime;
     private final TurnRepository turns;
     private final ChatMemberRepository channelMembers;
+    private final VisibilityBackfillExecutor visibilityBackfill;
 
     public GameMutationService(
             GameRepository games,
@@ -123,7 +125,8 @@ public class GameMutationService {
             RestrictionRepository restrictions,
             RealtimeEvents realtime,
             TurnRepository turns,
-            ChatMemberRepository channelMembers) {
+            ChatMemberRepository channelMembers,
+            VisibilityBackfillExecutor visibilityBackfill) {
         this.games = games;
         this.memberships = memberships;
         this.events = events;
@@ -143,6 +146,7 @@ public class GameMutationService {
         this.realtime = realtime;
         this.turns = turns;
         this.channelMembers = channelMembers;
+        this.visibilityBackfill = visibilityBackfill;
     }
 
     // --- Создание и содержимое --------------------------------------------------------
@@ -418,7 +422,8 @@ public class GameMutationService {
                 status,
                 now,
                 status == MembershipStatus.JOINED ? now : null,
-                status == MembershipStatus.LEFT ? now : null);
+                status == MembershipStatus.LEFT ? now : null,
+                null);
         memberships.insert(membership);
         event(gameId, eventTypeOf(status), actorUserId, payload("userId", userId.toString()));
         // Личный чат с мастером заводится входом в игру, а не отдельным действием (`D-037`).
@@ -438,17 +443,9 @@ public class GameMutationService {
         }
 
         Instant now = Instant.now();
-        Membership next = new Membership(
-                current.id(),
-                current.gameId(),
-                current.userId(),
-                current.role(),
-                status,
-                current.createdAt(),
-                status == MembershipStatus.JOINED ? now : current.joinedAt(),
-                status == MembershipStatus.LEFT ? now : current.leftAt());
+        Membership next = current.withStatus(status, now);
         memberships.updateStatus(next);
-        event(gameId, eventTypeOf(status), actorUserId, payload("userId", userId.toString()));
+        event(gameId, eventTypeOf(status), actorUserId, membershipPayload(next, current.reservedCharacterId()));
         if (status == MembershipStatus.JOINED) {
             openMasterDm(requireGame(gameId), next);
         }
@@ -459,9 +456,431 @@ public class GameMutationService {
         return switch (status) {
             case INVITED -> GameEventType.MEMBERSHIP_INVITED;
             case JOINED -> GameEventType.MEMBERSHIP_JOINED;
+            case DECLINED -> GameEventType.MEMBERSHIP_DECLINED;
             case LEFT -> GameEventType.MEMBERSHIP_LEFT;
             case BANNED -> GameEventType.MEMBERSHIP_BANNED;
         };
+    }
+
+    // --- Приглашения, вход и выход (E13) ------------------------------------------------
+
+    /**
+     * Приглашение мастером (`REQUIREMENTS §6`, `PLAN` E13). Приглашает только мастер
+     * (`D-131`); игрок входа не открывает никому.
+     *
+     * <p>Имя цели приходит сюда уже разрешённым в `userId`: поиск пользователя по логину —
+     * забота `MembershipService`, а не агрегата игры, потому что иначе `game` зависел бы от
+     * учётных записей. Несуществующий логин отвергается там же, до всякой записи: строка
+     * участия на выдуманного человека завела бы призрак в составе игры.
+     *
+     * <p>Персонаж <b>бронируется</b>, а не занимается (`D-130`): `D-100` прямо говорит, что
+     * `INVITED` в захвате слота не участвует. Бронь живёт в `membership.reserved_character_id`
+     * и снимается отказом, баном или выходом; поэтому приглашённый не мешает мастеру
+     * распоряжаться слотом, но и другой игрок не может занять обещанное.
+     */
+    @Transactional
+    public Membership invitePlayer(
+            UUID actorUserId, UUID gameId, UUID userId, MembershipRole role, UUID characterId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "game_finished", "Игра завершена: состав участников не меняется");
+        if (role == MembershipRole.MASTER) {
+            throw ApiException.badRequest(
+                    "master_membership_immutable", "Мастерство не приглашается и не передаётся");
+        }
+        if (role == MembershipRole.OBSERVER && characterId != null) {
+            throw ApiException.badRequest(
+                    "observer_cannot_reserve", "Наблюдателю персонаж не бронируется");
+        }
+
+        Membership existing = memberships.find(gameId, userId).orElse(null);
+        if (existing != null && existing.role() == MembershipRole.MASTER) {
+            throw ApiException.conflict(
+                    "master_membership_immutable", "Мастер уже участвует в этой игре");
+        }
+        if (existing != null && existing.banned()) {
+            throw ApiException.conflict(
+                    "membership_banned", "Участие запрещено мастером: сначала снимите бан");
+        }
+        if (existing != null && existing.invited()
+                && Objects.equals(existing.reservedCharacterId(), characterId)) {
+            return existing;
+        }
+        UUID reserved = characterId == null ? null : reserveCharacter(gameId, characterId);
+        Instant now = Instant.now();
+        Membership membership;
+        if (existing == null) {
+            membership = new Membership(
+                    Uuids.v7(),
+                    gameId,
+                    userId,
+                    role,
+                    MembershipStatus.INVITED,
+                    now,
+                    null,
+                    null,
+                    reserved);
+            memberships.insert(membership);
+        } else {
+            membership = existing
+                    .withRole(role)
+                    .withStatus(MembershipStatus.INVITED, now)
+                    .withReservedCharacter(reserved);
+            memberships.updateStatus(membership);
+        }
+        Map<String, Object> payload = membershipPayload(membership, membership.userId());
+        payload.put("midGame", game.state().phase() == Phase.RUNNING);
+        event(gameId, GameEventType.MEMBERSHIP_INVITED, actorUserId, payload);
+        return membership;
+    }
+
+    /**
+     * Согласие приглашённого: `INVITED → JOINED` (`PLAN` E13). Захват слота происходит
+     * только здесь (`D-130`) и под блокировкой строки персонажа (`D-100`): двое согласий
+     * на один слот не должны оба стать «занято». Отказ второго — спорная ситуация, и она
+     * разрешается базой, а не порядком проверок в сервисе.
+     */
+    @Transactional
+    public Membership acceptInvitation(UUID userId, UUID gameId) {
+        Game game = requireGameForMember(userId, gameId);
+        Membership membership = requireInvited(gameId, userId);
+        // Приглашение наблюдателя слота не бронирует (`D-130`), и занимать ему нечего:
+        // согласие такого участия — только смена статуса.
+        if (membership.reservedCharacterId() != null) {
+            claimCharacter(gameId, membership, membership.reservedCharacterId(), false);
+        }
+        Membership joined = membership.withStatus(MembershipStatus.JOINED, Instant.now());
+        memberships.updateStatus(joined);
+        event(gameId, GameEventType.MEMBERSHIP_JOINED, userId, membershipPayload(joined, joined.userId()));
+        if (joined.role() == MembershipRole.PLAYER) {
+            openMasterDm(game, joined);
+        }
+        scheduleBackfill(joined, game);
+        return joined;
+    }
+
+    /**
+     * Отказ от приглашения: `INVITED → DECLINED` (`D-123`). Бронь снимается — иначе
+     * отказавшийся держал бы персонажа занятым навсегда, а сам в игру не собирался.
+     */
+    @Transactional
+    public Membership declineInvitation(UUID userId, UUID gameId) {
+        requireGameForMember(userId, gameId);
+        Membership membership = requireInvited(gameId, userId);
+        UUID reserved = membership.reservedCharacterId();
+        Membership declined = membership.withStatus(MembershipStatus.DECLINED, Instant.now());
+        memberships.updateStatus(declined);
+        Map<String, Object> payload = membershipPayload(declined, userId);
+        if (reserved != null) {
+            payload.put("characterId", reserved.toString());
+        }
+        event(gameId, GameEventType.MEMBERSHIP_DECLINED, userId, payload);
+        return declined;
+    }
+
+    /**
+     * Свободный вход в публичную игру (`REQUIREMENTS §4`, `PLAN` E13). Открыт после `READY`,
+     * включая середину `RUNNING`; в приватную игру так не войти.
+     *
+     * <p>Роль выбирается по наличию слота (`D-132`): есть свободный играбельный персонаж —
+     * вход игроком за него, нет — вход наблюдателем. Иначе человек либо входил бы в роль,
+     * которую нечем занять, либо получал отказ там, где участием можно распорядиться.
+     * Повторный вход идемпотентен, а наблюдатель поднимается до игрока, когда слот освободится.
+     */
+    @Transactional
+    public Membership joinOpenGame(UUID userId, UUID gameId) {
+        Game game = requireGame(gameId);
+        requireNotFinished(game, "game_finished", "Игра завершена: вход закрыт");
+        if (game.state().visibility() != Visibility.PUBLIC) {
+            throw ApiException.forbidden(
+                    "private_game", "Это приватная игра: вход только по приглашению мастера");
+        }
+        if (game.state().readiness() != Readiness.READY) {
+            throw ApiException.conflict(
+                    "game_not_ready", "Игра ещё не готова: вход откроется после READY");
+        }
+        Membership existing = memberships.find(gameId, userId).orElse(null);
+        if (existing != null && existing.role() == MembershipRole.MASTER) {
+            return existing;
+        }
+        if (existing != null && existing.banned()) {
+            throw ApiException.forbidden(
+                    "membership_banned", "Участие в этой игре запрещено мастером");
+        }
+
+        UUID slot = freeCharacterId(gameId);
+        MembershipRole role = slot == null ? MembershipRole.OBSERVER : MembershipRole.PLAYER;
+        if (existing != null && existing.joined()
+                && existing.role() == MembershipRole.PLAYER && slot != null) {
+            // Игрок уже вошёл и слот свободен: персонаж мог освободиться после его входа.
+            claimCharacter(gameId, existing, slot, false);
+            return existing;
+        }
+        if (existing != null && existing.joined() && existing.role() == role) {
+            return existing;
+        }
+
+        Instant now = Instant.now();
+        Membership membership;
+        if (existing == null) {
+            membership = new Membership(
+                    Uuids.v7(), gameId, userId, role, MembershipStatus.JOINED, now, now, null, null);
+            memberships.insert(membership);
+        } else {
+            membership = existing.withRole(role).withStatus(MembershipStatus.JOINED, now);
+            memberships.updateStatus(membership);
+        }
+        event(gameId, GameEventType.MEMBERSHIP_JOINED, userId, membershipPayload(membership, userId));
+        if (role == MembershipRole.PLAYER) {
+            claimCharacter(gameId, membership, slot, false);
+            openMasterDm(game, membership);
+        }
+        scheduleBackfill(membership, game);
+        return membership;
+    }
+
+    /**
+     * Добровольный выход (`PLAN` E13, задача 5): `JOINED → LEFT`. История персонажей
+     * сохраняется целиком — сообщения, присутствие в прошлом и карточки остаются читаемыми
+     * (`D-009`); снимается только занятость и текущее место, иначе персонаж остался бы
+     * «ничьим, но стоящим» и лента показывала бы его всем.
+     */
+    @Transactional
+    public Membership leaveGame(UUID userId, UUID gameId) {
+        requireGameForMember(userId, gameId);
+        Membership membership = requireJoined(gameId, userId, "not_joined", "Вы не участвуете в игре");
+        if (membership.role() == MembershipRole.MASTER) {
+            throw ApiException.conflict(
+                    "master_cannot_leave", "Мастер не выходит из игры: он остаётся ответственным за неё");
+        }
+        releaseCharacters(gameId, membership);
+        Membership left = membership.withStatus(MembershipStatus.LEFT, Instant.now());
+        memberships.updateStatus(left);
+        event(gameId, GameEventType.MEMBERSHIP_LEFT, userId, membershipPayload(left, userId));
+        return left;
+    }
+
+    /**
+     * Бан в одной игре (`REQUIREMENTS §6`): статус участия, а не глобальный запрет, поэтому
+     * другие игры человека он не трогает (`D-133`). Слот освобождается так же, как при
+     * выходе: забаненный не продолжает играть своим персонажем.
+     */
+    @Transactional
+    public Membership banPlayer(UUID actorUserId, UUID gameId, UUID userId) {
+        requireMaster(actorUserId, gameId);
+        Membership membership = requireJoined(gameId, userId, "membership_not_found", "Участие не найдено");
+        if (membership.role() == MembershipRole.MASTER) {
+            throw ApiException.conflict(
+                    "master_membership_immutable", "Статус участия мастера не меняется");
+        }
+        releaseCharacters(gameId, membership);
+        Membership banned = membership.withStatus(MembershipStatus.BANNED, Instant.now());
+        memberships.updateStatus(banned);
+        event(gameId, GameEventType.MEMBERSHIP_BANNED, actorUserId, membershipPayload(banned, userId));
+        return banned;
+    }
+
+    /**
+     * Снятие бана: `BANNED → LEFT`. Именно `LEFT`, а не `JOINED`: снятие запрета возвращает
+     * человеку право входа, но не вводит его в игру за него (`D-133`). Дальше он входит сам
+     * в публичной игре или ждёт приглашения в приватной.
+     */
+    @Transactional
+    public Membership unbanPlayer(UUID actorUserId, UUID gameId, UUID userId) {
+        requireMaster(actorUserId, gameId);
+        Membership membership = memberships.find(gameId, userId)
+                .orElseThrow(() -> ApiException.notFound("membership_not_found", "Участие не найдено"));
+        if (!membership.banned()) {
+            throw ApiException.conflict("not_banned", "Этот игрок в игре не забанен");
+        }
+        Membership unbanned = membership.withStatus(MembershipStatus.LEFT, Instant.now());
+        memberships.updateStatus(unbanned);
+        event(gameId, GameEventType.MEMBERSHIP_UNBANNED, actorUserId, membershipPayload(unbanned, userId));
+        return unbanned;
+    }
+
+    /**
+     * Занятие свободного персонажа (`PLAN` E13, задача 2). Блокировка строки персонажа —
+     * то самое место, где «один игрок на слот» становится правдой (`D-100`): без неё двое
+     * прочитали бы «свободен» и оба записали себя. Ограничения «один персонаж на игрока»
+     * нет и не должно быть (`CONVENTIONS`): вторым персонажем играют так же, как первым.
+     */
+    @Transactional
+    public Character claimCharacter(UUID userId, UUID gameId, UUID characterId) {
+        Game game = requireGameForMember(userId, gameId);
+        requireNotFinished(game, "game_finished", "Игра завершена: персонажа не занять");
+        Membership membership = requireJoined(gameId, userId, "not_joined", "Сначала войдите в игру");
+        if (membership.role() == MembershipRole.OBSERVER) {
+            throw ApiException.forbidden(
+                    "observer_cannot_occupy", "Наблюдатель не занимает персонажа: он читает игру");
+        }
+        return claimCharacter(gameId, membership, characterId, true);
+    }
+
+    /**
+     * Освобождение персонажа: слот становится свободным и может достаться другому
+     * (`D-100`). Присутствие закрывается: «освобождён, но стоит в комнате» — это персонаж,
+     * которым никто не играет, и показывать его другим было бы неправдой.
+     */
+    @Transactional
+    public Character releaseCharacter(UUID userId, UUID gameId, UUID characterId) {
+        requireGameForMember(userId, gameId);
+        Membership membership = requireJoined(gameId, userId, "not_joined", "Сначала войдите в игру");
+        Character character = requireCharacter(gameId, characterId);
+        if (!Objects.equals(character.occupantMembershipId(), membership.id())) {
+            throw ApiException.forbidden("not_your_character", "Этот персонаж занят не вами");
+        }
+        releaseCharacter(gameId, membership, character);
+        return requireCharacter(gameId, characterId);
+    }
+
+    private UUID reserveCharacter(UUID gameId, UUID characterId) {
+        Character character = requireCharacter(gameId, characterId);
+        if (character.archived()) {
+            throw ApiException.conflict("character_archived", "Персонаж выведен из игры");
+        }
+        if (!character.playable() || character.npc()) {
+            throw ApiException.badRequest(
+                    "character_not_playable", "Этот персонаж не играбельный: его нельзя занять");
+        }
+        if (character.occupantMembershipId() != null) {
+            throw ApiException.conflict("character_occupied", "Персонаж уже занят другим игроком");
+        }
+        memberships.findReserving(characterId).ifPresent(reserving -> {
+            throw ApiException.conflict(
+                    "character_reserved", "Персонаж забронирован другим приглашением");
+        });
+        return characterId;
+    }
+
+    /** Захват слота под блокировкой строки: бронь, согласие и свободное занятие — один путь. */
+    private Character claimCharacter(
+            UUID gameId, Membership membership, UUID characterId, boolean explicit) {
+        if (characterId == null) {
+            throw ApiException.badRequest(
+                    "character_required", "Укажите персонажа, которого занимаете");
+        }
+        Character locked = characters.lockById(characterId)
+                .orElseThrow(() -> ApiException.notFound("character_not_found", "Персонаж не найден"));
+        if (!locked.gameId().equals(gameId)) {
+            throw ApiException.notFound("character_not_found", "Персонаж не найден");
+        }
+        if (locked.archived()) {
+            throw ApiException.conflict("character_archived", "Персонаж выведен из игры");
+        }
+        if (!locked.playable() || locked.npc()) {
+            throw ApiException.badRequest(
+                    "character_not_playable", "Этот персонаж не играбельный: его нельзя занять");
+        }
+        if (locked.occupantMembershipId() != null
+                && !locked.occupantMembershipId().equals(membership.id())) {
+            throw ApiException.conflict("character_occupied", "Персонаж уже занят другим игроком");
+        }
+        if (!explicit && locked.occupantMembershipId() == null) {
+            memberships.findReserving(characterId)
+                    .filter(reserving -> !reserving.id().equals(membership.id()))
+                    .ifPresent(reserving -> {
+                        throw ApiException.conflict(
+                                "character_reserved", "Персонаж забронирован другим приглашением");
+                    });
+        }
+        if (locked.occupantMembershipId() == null) {
+            characters.setOccupant(characterId, membership.id());
+        }
+        Map<String, Object> payload = payload("characterId", characterId.toString());
+        payload.put("membershipId", membership.id().toString());
+        event(gameId, GameEventType.CHARACTER_OCCUPIED, membership.userId(), payload);
+        return locked;
+    }
+
+    /** Снятие занятости: присутствие закрывается, участие в закрытых каналах — тоже. */
+    private void releaseCharacter(UUID gameId, Membership membership, Character character) {
+        characters.setOccupant(character.id(), null);
+        presence.findActive(character.id()).ifPresent(active -> presence.close(active.id()));
+        for (ChatMember member : channelMembers.findActiveBySubject(
+                gameId, InboxSubject.character(character.id()))) {
+            channelMembers.close(member.id(), ChatMemberState.LEFT);
+        }
+        Map<String, Object> payload = payload("characterId", character.id().toString());
+        payload.put("membershipId", membership.id().toString());
+        event(gameId, GameEventType.CHARACTER_RELEASED, membership.userId(), payload);
+    }
+
+    /** Освобождение всех слотов участия: выход и бан снимают занятость целиком. */
+    private void releaseCharacters(UUID gameId, Membership membership) {
+        for (Character character : characters.findByOccupant(membership.id())) {
+            releaseCharacter(gameId, membership, character);
+        }
+    }
+
+    /** Первый свободный играбельный персонаж: порядок по имени, чтобы выбор был воспроизводим. */
+    private UUID freeCharacterId(UUID gameId) {
+        return characters.findByGame(gameId).stream()
+                .filter(character -> !character.archived()
+                        && character.playable()
+                        && !character.npc()
+                        && character.occupantMembershipId() == null)
+                .filter(character -> memberships.findReserving(character.id()).isEmpty())
+                .map(Character::id)
+                .sorted()
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Досчёт видимости при входе в середину игры (`D-086`). Признак ставится в той же
+     * транзакции, что и вход: если узел упадёт до досчёта, следующий прогон добрать не
+     * забудет. Сам досчёт идёт вне запроса — он пишет тысячи строк, и ждать его игроку
+     * незачем.
+     */
+    private void scheduleBackfill(Membership membership, Game game) {
+        if (game.state().phase() != Phase.RUNNING) {
+            return;
+        }
+        memberships.setBackfillPending(membership.id(), true);
+        visibilityBackfill.schedule();
+    }
+
+    private Membership requireInvited(UUID gameId, UUID userId) {
+        Membership membership = memberships.find(gameId, userId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
+        if (!membership.invited()) {
+            throw ApiException.conflict("not_invited", "Приглашения в эту игру нет");
+        }
+        return membership;
+    }
+
+    private Membership requireJoined(UUID gameId, UUID userId, String code, String message) {
+        Membership membership = memberships.find(gameId, userId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
+        if (!membership.joined()) {
+            throw ApiException.conflict(code, message);
+        }
+        return membership;
+    }
+
+    private Game requireGameForMember(UUID userId, UUID gameId) {
+        Game game = requireGame(gameId);
+        Membership membership = memberships.find(gameId, userId)
+                .orElseThrow(() -> ApiException.forbidden("not_a_member", "Нет доступа к этой игре"));
+        if (membership.banned()) {
+            throw ApiException.forbidden("membership_banned", "Участие в этой игре запрещено мастером");
+        }
+        return game;
+    }
+
+    /**
+     * Payload события участия. `role` и `status` рядом с `userId`, потому что читатель
+     * журнала (аудит, экспорт `O02`) не должен ходить за ними в `membership`: строка могла
+     * смениться после события, а событие обязано читаться как было.
+     */
+    private static Map<String, Object> membershipPayload(Membership membership, UUID userId) {
+        Map<String, Object> payload = payload("userId", userId.toString());
+        payload.put("role", membership.role().name());
+        payload.put("status", membership.status().name());
+        if (membership.reservedCharacterId() != null) {
+            payload.put("characterId", membership.reservedCharacterId().toString());
+        }
+        return payload;
     }
 
     // --- Локации и переходы (E04) ------------------------------------------------------
@@ -807,6 +1226,31 @@ public class GameMutationService {
         return requireCharacter(gameId, characterId);
     }
 
+    /**
+     * Право на смену скрытности (`REQUIREMENTS §9`, `D-006`, `D-108`). Вход в скрытность —
+     * жест мастера по действию персонажа, и раньше `E13` его некому подтвердить; выход же
+     * свободен и владельцу слота. Разделение сохраняется и после появления занятости: игрок
+     * сам возвращает персонажа в игру, но спрятать его без мастера не может.
+     */
+    private Game requireStealthAuthority(
+            UUID actorUserId, UUID gameId, UUID characterId, boolean hidingIn) {
+        Game game = requireGame(gameId);
+        Membership membership = memberships.find(gameId, actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("not_master", "Изменять мир может только мастер"));
+        if (membership.role() == MembershipRole.MASTER) {
+            return game;
+        }
+        if (hidingIn) {
+            throw ApiException.forbidden(
+                    "stealth_requires_master", "В скрытность персонажа вводит мастер");
+        }
+        Character character = requireCharacter(gameId, characterId);
+        if (membership.joined() && Objects.equals(character.occupantMembershipId(), membership.id())) {
+            return game;
+        }
+        throw ApiException.forbidden("not_your_character", "Это чужой персонаж");
+    }
+
     /** Отказ на удаление персонажа; причина отказа та же, что у локации (`D-010`, `D-103`). */
     @Transactional(readOnly = true)
     public void rejectCharacterDeletion(UUID actorUserId, UUID gameId, UUID characterId) {
@@ -830,13 +1274,60 @@ public class GameMutationService {
     public Presence placeCharacter(
             UUID actorUserId, UUID gameId, UUID characterId, UUID chatId) {
         Game game = requireMaster(actorUserId, gameId);
+        return placeCharacterInternal(game, actorUserId, characterId, chatId);
+    }
+
+    /**
+     * Перемещение персонажа игроком по переходу (`REQUIREMENTS §8`, `D-107`). Мастер двигает
+     * кого угодно куда угодно; игрок идёт только своим персонажем и только по переходу,
+     * который для этого персонажа открыт (`AVAILABLE`). Проверка состояния ребра живёт
+     * здесь, а не в контроллере: то же правило придёт из заявки игрока (`E14`).
+     *
+     * <p>Направление берётся у ребра, а не у клиента: иначе игрок указал бы «откуда», и
+     * перемещение из локации, где персонажа нет, прошло бы проверку перехода.
+     */
+    @Transactional
+    public Presence moveCharacter(
+            UUID userId, UUID gameId, UUID characterId, UUID transitionId) {
+        Game game = requireGameForMember(userId, gameId);
         requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Membership membership = requireJoined(gameId, userId, "not_joined", "Сначала войдите в игру");
         Character character = requireCharacter(gameId, characterId);
+        if (!Objects.equals(character.occupantMembershipId(), membership.id())) {
+            throw ApiException.forbidden("not_your_character", "Этот персонаж занят не вами");
+        }
+        Transition transition = transitions.findById(transitionId)
+                .orElseThrow(() -> ApiException.notFound("transition_not_found", "Переход не найден"));
+        if (!transition.gameId().equals(gameId)) {
+            throw ApiException.notFound("transition_not_found", "Переход не найден");
+        }
+        if (transition.archived()) {
+            throw ApiException.conflict("transition_archived", "Переход выведен из игры");
+        }
+        Presence current = presence.findActive(characterId)
+                .orElseThrow(() -> ApiException.conflict(
+                        "character_not_placed", "Персонаж нигде не находится: идти неоткуда"));
+        if (!current.chatId().equals(transition.fromChatId())) {
+            throw ApiException.conflict("not_at_transition", "Переход начинается не там, где вы стоите");
+        }
+        EdgeState edge = edgeStates.find(transitionId, characterId).map(TransitionState::state)
+                .orElse(EdgeState.UNKNOWN);
+        if (edge != EdgeState.AVAILABLE) {
+            throw ApiException.forbidden(
+                    "transition_unavailable", "Этот переход для вашего персонажа закрыт");
+        }
+        return placeCharacterInternal(game, userId, characterId, transition.toChatId());
+    }
+
+    private Presence placeCharacterInternal(
+            Game game, UUID actorUserId, UUID characterId, UUID chatId) {
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Character character = requireCharacter(game.id(), characterId);
         if (character.archived()) {
             throw ApiException.conflict(
                     "character_archived", "Персонаж выведен из игры: сначала снимите архивацию");
         }
-        Chat location = requireLocation(gameId, chatId);
+        Chat location = requireLocation(game.id(), chatId);
         if (location.archived()) {
             throw ApiException.conflict(
                     "chat_archived", "Локация выведена из игры: перемещение в неё запрещено");
@@ -848,7 +1339,7 @@ public class GameMutationService {
         }
         if (current != null) {
             presence.close(current.id());
-            eventInChat(gameId, GameEventType.CHARACTER_LEFT, actorUserId, current.chatId(), characterId,
+            eventInChat(game.id(), GameEventType.CHARACTER_LEFT, actorUserId, current.chatId(), characterId,
                     placementPayload(characterId, current));
         }
         // Скрытность переезжает вместе с персонажем: иначе перемещение скрытого персонажа
@@ -856,7 +1347,7 @@ public class GameMutationService {
         boolean hidden = current != null && current.hidden();
         Presence placed = new Presence(Uuids.v7(), characterId, location.id(), hidden, Instant.now(), null);
         presence.insert(placed);
-        eventInChat(gameId, GameEventType.CHARACTER_ENTERED, actorUserId, placed.chatId(), characterId,
+        eventInChat(game.id(), GameEventType.CHARACTER_ENTERED, actorUserId, placed.chatId(), characterId,
                 placementPayload(characterId, placed));
         return placed;
     }
@@ -879,7 +1370,7 @@ public class GameMutationService {
     @Transactional
     public Presence setCharacterStealth(
             UUID actorUserId, UUID gameId, UUID characterId, boolean hidden, String reason) {
-        Game game = requireMaster(actorUserId, gameId);
+        Game game = requireStealthAuthority(actorUserId, gameId, characterId, hidden);
         requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
         requireCharacter(gameId, characterId);
         Presence current = presence.findActive(characterId)

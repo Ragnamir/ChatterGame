@@ -3,6 +3,7 @@ package com.chattergame.chat;
 import com.chattergame.character.Character;
 import com.chattergame.character.CharacterQueryService;
 import com.chattergame.character.CharacterRepository;
+import com.chattergame.character.PresenceRepository;
 import com.chattergame.character.PresentCharacter;
 import com.chattergame.game.Game;
 import com.chattergame.game.Membership;
@@ -39,6 +40,7 @@ public class ChatGraphService {
     private final CharacterRepository characters;
     private final CharacterQueryService characterReads;
     private final MembershipRepository memberships;
+    private final PresenceRepository presence;
 
     public ChatGraphService(
             ChatRepository chats,
@@ -46,13 +48,15 @@ public class ChatGraphService {
             TransitionStateRepository edgeStates,
             CharacterRepository characters,
             CharacterQueryService characterReads,
-            MembershipRepository memberships) {
+            MembershipRepository memberships,
+            PresenceRepository presence) {
         this.chats = chats;
         this.transitions = transitions;
         this.edgeStates = edgeStates;
         this.characters = characters;
         this.characterReads = characterReads;
         this.memberships = memberships;
+        this.presence = presence;
     }
 
     /**
@@ -69,7 +73,8 @@ public class ChatGraphService {
             throw ApiException.forbidden("membership_banned", "Участие в этой игре запрещено мастером");
         }
         boolean master = membership.role() == MembershipRole.MASTER;
-        UUID viewAs = authorizeViewer(game, membership, master, characterId);
+        boolean observer = membership.role() == MembershipRole.OBSERVER;
+        UUID viewAs = authorizeViewer(game, membership, master, observer, characterId);
 
         List<Chat> locations = chats.findByGame(game.id(), ChatKind.LOCATION);
         Set<UUID> archived = locations.stream()
@@ -77,11 +82,20 @@ public class ChatGraphService {
                 .map(Chat::id)
                 .collect(Collectors.toSet());
 
+        // Наблюдателю открыты не все локации, а те, где уже был играбельный персонаж
+        // (`D-129`). Отбор идёт здесь, при сборке ответа, а не в запросе: правило одно на
+        // граф и на ленту, и разнеси его по запросам — оно разойдётся при первом изменении
+        // (`D-030`).
+        List<Chat> visible = observer
+                ? locations.stream().filter(location -> visibleToObserver(location)).toList()
+                : locations;
+        Set<UUID> visibleIds = visible.stream().map(Chat::id).collect(Collectors.toSet());
+
         List<GameGraph.Node> nodes = new ArrayList<>();
         // Присутствующие собираются одним запросом на игру: граф отдаётся целиком, и запрос
         // на каждую локацию отдельно превратил бы один ответ клиенту в полсотни запросов к базе.
         Map<UUID, List<PresentCharacter>> present = characterReads.presentByChat(game.id(), master, viewAs);
-        for (Chat location : locations) {
+        for (Chat location : visible) {
             // До READY архивная локация для игрока не существует вовсе: он не должен узнать,
             // что мастер что-то заводил и передумал (`D-009`).
             if (location.archived() && !master && game.state().readiness() != Readiness.READY) {
@@ -99,6 +113,13 @@ public class ChatGraphService {
         List<GameGraph.Edge> edges = new ArrayList<>();
         if (viewAs == null) {
             for (Transition transition : transitions.findByGame(game.id())) {
+                // Наблюдателю ребро отдаётся, только если обе его локации ему открыты:
+                // иначе переход показал бы место, куда игра ещё не дошла (`D-129`).
+                if (observer
+                        && !(visibleIds.contains(transition.fromChatId())
+                                && visibleIds.contains(transition.toChatId()))) {
+                    continue;
+                }
                 edges.add(new GameGraph.Edge(
                         transition.id(),
                         transition.fromChatId(),
@@ -137,14 +158,21 @@ public class ChatGraphService {
         return new GameGraph(nodes, edges);
     }
 
+    /** Локация открыта наблюдателю, если в ней уже был играбельный персонаж (`D-129`). */
+    private boolean visibleToObserver(Chat location) {
+        return presence.hasPlayableHistory(location.id());
+    }
+
     /**
      * Проверка «чьими глазами» и ответ на вопрос, отбирать ли рёбра по знанию персонажа.
      * Мастер без персонажа получает полный граф, поэтому `null` здесь — это не «нет доступа»,
-     * а «смотрит как мастер».
+     * а «смотрит как мастер». Наблюдатель тоже смотрит без персонажа (`D-086`), но видит не
+     * всё: у него отбираются локации и рёбра (`D-129`).
      */
-    private UUID authorizeViewer(Game game, Membership membership, boolean master, UUID characterId) {
+    private UUID authorizeViewer(
+            Game game, Membership membership, boolean master, boolean observer, UUID characterId) {
         if (characterId == null) {
-            if (!master) {
+            if (!master && !observer) {
                 throw ApiException.badRequest(
                         "character_required", "Укажите персонажа, от чьего лица смотрите граф");
             }

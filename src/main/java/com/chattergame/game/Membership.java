@@ -15,12 +15,38 @@ public record Membership(
         MembershipStatus status,
         Instant createdAt,
         Instant joinedAt,
-        Instant leftAt) {
+        Instant leftAt,
+        UUID reservedCharacterId) {
 
     /** Мастер создаёт игру и сразу в ней участвует — приглашать его некому (`REQUIREMENTS §6`). */
     public static Membership master(UUID id, UUID gameId, UUID userId, Instant now) {
         return new Membership(
-                id, gameId, userId, MembershipRole.MASTER, MembershipStatus.JOINED, now, now, null);
+                id, gameId, userId, MembershipRole.MASTER, MembershipStatus.JOINED, now, now, null, null);
+    }
+
+    /** Копия строки со сменой статуса: остальные поля принадлежат участию, а не переходу. */
+    public Membership withStatus(MembershipStatus next, Instant now) {
+        return new Membership(
+                id,
+                gameId,
+                userId,
+                role,
+                next,
+                createdAt,
+                next == MembershipStatus.JOINED ? now : joinedAt,
+                next == MembershipStatus.LEFT ? now : leftAt,
+                next == MembershipStatus.INVITED ? reservedCharacterId : null);
+    }
+
+    /** Роль меняется ровно один раз и ровно в одну сторону: наблюдатель становится игроком (`D-130`). */
+    public Membership withRole(MembershipRole next) {
+        return new Membership(
+                id, gameId, userId, next, status, createdAt, joinedAt, leftAt, reservedCharacterId);
+    }
+
+    public Membership withReservedCharacter(UUID characterId) {
+        return new Membership(
+                id, gameId, userId, role, status, createdAt, joinedAt, leftAt, characterId);
     }
 
     public boolean joined() {
@@ -29,5 +55,9 @@ public record Membership(
 
     public boolean banned() {
         return status == MembershipStatus.BANNED;
+    }
+
+    public boolean invited() {
+        return status == MembershipStatus.INVITED;
     }
 }

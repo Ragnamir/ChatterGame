@@ -22,7 +22,7 @@ import java.util.UUID;
 public class MembershipRepository {
 
     private static final String COLUMNS =
-            "id, game_id, user_id, role, status, created_at, joined_at, left_at";
+            "id, game_id, user_id, role, status, created_at, joined_at, left_at, reserved_character_id";
 
     private final JdbcTemplate jdbc;
     private final RowMapper<Membership> mapper = this::map;
@@ -34,7 +34,7 @@ public class MembershipRepository {
     public void insert(Membership membership) {
         jdbc.update(
                 "INSERT INTO membership (id, game_id, user_id, role, status, created_at, joined_at, "
-                        + "left_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        + "left_at, reserved_character_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 membership.id(),
                 membership.gameId(),
                 membership.userId(),
@@ -42,15 +42,19 @@ public class MembershipRepository {
                 membership.status().name(),
                 Timestamp.from(membership.createdAt()),
                 membership.joinedAt() == null ? null : Timestamp.from(membership.joinedAt()),
-                membership.leftAt() == null ? null : Timestamp.from(membership.leftAt()));
+                membership.leftAt() == null ? null : Timestamp.from(membership.leftAt()),
+                membership.reservedCharacterId());
     }
 
     public void updateStatus(Membership membership) {
         jdbc.update(
-                "UPDATE membership SET status = ?, joined_at = ?, left_at = ? WHERE id = ?",
+                "UPDATE membership SET status = ?, joined_at = ?, left_at = ?, role = ?, "
+                        + "reserved_character_id = ? WHERE id = ?",
                 membership.status().name(),
                 membership.joinedAt() == null ? null : Timestamp.from(membership.joinedAt()),
                 membership.leftAt() == null ? null : Timestamp.from(membership.leftAt()),
+                membership.role().name(),
+                membership.reservedCharacterId(),
                 membership.id());
     }
 
@@ -70,6 +74,43 @@ public class MembershipRepository {
                 gameId);
     }
 
+    /**
+     * Участие, забронировавшее персонажа приглашением (`D-130`). Читается при захвате слота:
+     * бронь не занимает персонажа, но и не отдаёт его чужому.
+     */
+    public Optional<Membership> findReserving(UUID characterId) {
+        return jdbc.query(
+                        "SELECT " + COLUMNS + " FROM membership "
+                                + "WHERE reserved_character_id = ? AND status = 'INVITED'",
+                        mapper,
+                        characterId)
+                .stream()
+                .findFirst();
+    }
+
+    public Optional<Membership> findById(UUID id) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM membership WHERE id = ?", mapper, id)
+                .stream()
+                .findFirst();
+    }
+
+    /**
+     * Участия с незавершённым досчётом видимости (`D-086`). Список читается при старте
+     * прогона, а не хранится в памяти: признак лежит в БД именно затем, чтобы упавший узел
+     * оставил след.
+     */
+    public List<UUID> findPendingBackfill() {
+        return jdbc.queryForList(
+                "SELECT id FROM membership WHERE backfill_pending = true AND status = 'JOINED' "
+                        + "ORDER BY created_at",
+                UUID.class);
+    }
+
+    public void setBackfillPending(UUID membershipId, boolean pending) {
+        jdbc.update(
+                "UPDATE membership SET backfill_pending = ? WHERE id = ?", pending, membershipId);
+    }
+
     private Membership map(ResultSet rs, int rowNum) throws SQLException {
         Timestamp joinedAt = rs.getTimestamp("joined_at");
         Timestamp leftAt = rs.getTimestamp("left_at");
@@ -81,6 +122,7 @@ public class MembershipRepository {
                 MembershipStatus.valueOf(rs.getString("status")),
                 rs.getTimestamp("created_at").toInstant(),
                 joinedAt == null ? null : joinedAt.toInstant(),
-                leftAt == null ? null : leftAt.toInstant());
+                leftAt == null ? null : leftAt.toInstant(),
+                rs.getObject("reserved_character_id", UUID.class));
     }
 }

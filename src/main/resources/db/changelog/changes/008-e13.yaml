@@ -1,0 +1,58 @@
+databaseChangeLog:
+  # E13: участие — приглашения, занятие, наблюдатели, бан, выход.
+  # Применённые `001-baseline.yaml` … `007-e12.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Таблиц этап не заводит: участие и занятость уже описаны `membership` и
+  # `character.occupant_membership_id` (прецеденты `D-103`, `E10`). Недостаёт одного —
+  # места, где живёт резерв слота за приглашённым.
+  #
+  # 1. Резерв — колонка самого приглашения, а не признак занятости (`D-130`): `D-100`
+  #    прямо говорит, что `INVITED` в захвате слота не участвует. Слот занимается только
+  #    на `JOINED`, а до согласия `reserved_character_id` держит бронь. Иначе приглашение
+  #    выглядело бы захватом, а отказавшийся игрок оставлял бы персонажа занятым навсегда.
+  # 2. Один персонаж — одна бронь. Частичный уникальный индекс, а не проверка в сервисе:
+  #    два мастера (или один, дважды) не должны забронировать слот дважды, а проверка
+  #    «сначала прочитай, потом запиши» проигрывает гонку (`D-100`).
+  #    Индекс частичный по `status = 'INVITED'`: у вошедшего резерв уже стал занятостью,
+  #    и повторное приглашение того же человека не обязано спотыкаться о старую строку.
+
+  - changeSet:
+      id: 008-01-membership-reserved-character
+      author: e13
+      changes:
+        - addColumn:
+            tableName: membership
+            columns:
+              - column: { name: reserved_character_id, type: uuid }
+        - addForeignKeyConstraint:
+            baseTableName: membership
+            baseColumnNames: reserved_character_id
+            referencedTableName: character
+            referencedColumnNames: id
+            constraintName: fk_membership_reserved_character
+
+  - changeSet:
+      id: 008-02-membership-reserved-unique
+      author: e13
+      changes:
+        - sql:
+            sql: CREATE UNIQUE INDEX ux_membership_reserved_character ON membership (reserved_character_id) WHERE status = 'INVITED' AND reserved_character_id IS NOT NULL
+            rollback: DROP INDEX ux_membership_reserved_character
+
+  - changeSet:
+      id: 008-03-membership-backfill-pending
+      author: e13
+      changes:
+        # Признак незавершённого досчёта видимости. Не украшение: `D-086` требует
+        # материализовать историю при входе в середину игры, а материализация — запись в
+        # `inbox_entry`, которая обязана переживать перезапуск узла (`D-087`, тот же приём).
+        # Без признака упавший в середине досчёта узел оставил бы наблюдателя с половиной
+        # истории и без следа того, что досчёт не закончен.
+        - addColumn:
+            tableName: membership
+            columns:
+              - column:
+                  name: backfill_pending
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints: { nullable: false }

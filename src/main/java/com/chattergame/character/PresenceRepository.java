@@ -94,6 +94,35 @@ public class PresenceRepository {
         jdbc.update("UPDATE presence SET hidden = ? WHERE id = ?", hidden, id);
     }
 
+    /**
+     * Был ли в чате хоть один играбельный персонаж — по всей истории, а не по текущему
+     * составу (`D-129`). Этим признаком открывается локация наблюдателю: место, куда никто
+     * не входил, ещё не стало частью рассказа, а место, откуда все ушли, остаётся открытым,
+     * иначе прочитанное исчезало бы задним числом.
+     *
+     * <p>Скрытность входа здесь не учитывается намеренно: спрятавшийся персонаж всё равно
+     * был в комнате, и комната существует. Скрыто его содержимое, а не место (`D-007`).
+     */
+    public boolean hasPlayableHistory(UUID chatId) {
+        Boolean exists = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM presence p JOIN character c ON c.id = p.character_id "
+                        + "WHERE p.chat_id = ? AND c.playable = true AND c.npc = false)",
+                Boolean.class,
+                chatId);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /** Локации игры, куда хоть раз вводили играемого персонажа: область досчёта наблюдателя. */
+    public List<UUID> chatsWithPlayableHistory(UUID gameId) {
+        return jdbc.queryForList(
+                "SELECT DISTINCT p.chat_id FROM presence p "
+                        + "JOIN character c ON c.id = p.character_id "
+                        + "JOIN chat ch ON ch.id = p.chat_id "
+                        + "WHERE ch.game_id = ? AND c.playable = true ORDER BY p.chat_id",
+                UUID.class,
+                gameId);
+    }
+
     private Presence map(ResultSet rs, int rowNum) throws SQLException {
         Timestamp leftAt = rs.getTimestamp("left_at");
         return new Presence(

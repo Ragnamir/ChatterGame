@@ -13,3 +13,4 @@ a0f3ff4e10e693376d1c7771b1ce52364d7ab17ce9153070a41553da599d5051  db/changelog/c
 68f1fa4fd3f429813cebb0bcae09d3f3b4dd4ceb68c6932a1e33b907848f452c  db/changelog/changes/005-e08.yaml
 e9121ff7bea4f4b04b8d6a367563fe0d72317c1f89deb5d4d876ef6175a91d29  db/changelog/changes/006-e11.yaml
 abe398d88d912c0880159d2435ac22c84f1ac5eab9319f27b7ad2b1245ccc4fc  db/changelog/changes/007-e12.yaml
+3166ca2598ca6c71ac257989fb788e31cd8022e2d1dd356ca0277df5a93d6dab  db/changelog/changes/008-e13.yaml

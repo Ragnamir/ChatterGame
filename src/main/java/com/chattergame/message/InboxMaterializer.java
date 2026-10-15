@@ -127,7 +127,7 @@ public class InboxMaterializer {
             subjects.addAll(participants(game, chat, chatId, addressOccupants));
         }
         if (visibleTo(Viewer.OBSERVER, kind, hiddenAuthor)) {
-            subjects.addAll(observers(game));
+            subjects.addAll(observers(game, kind, chatId));
         }
         return subjects;
     }
@@ -161,7 +161,7 @@ public class InboxMaterializer {
             subjects.addAll(participants(game, chat, chatId, addressOccupants));
         }
         if (visibleTo(Viewer.OBSERVER, kind, false)) {
-            subjects.addAll(observers(game));
+            subjects.addAll(observers(game, kind, chatId));
         }
         return subjects;
     }
@@ -219,7 +219,20 @@ public class InboxMaterializer {
         return subjects;
     }
 
-    private LinkedHashSet<InboxSubject> observers(Game game) {
+    /**
+     * Наблюдатели, которым адресуется строка (`D-129`). Наблюдатель видит не «все локации»,
+     * а только те, где уже был хоть один играбельный персонаж: место, куда никто не входил,
+     * ещё не стало частью рассказа, и показывать его значило бы открыть мастеру заготовку.
+     * Финальное обсуждение открыто всегда — оно возникает завершением игры, а не входом.
+     *
+     * <p>Проверка идёт по истории присутствия (`presence`), а не по текущему составу: место,
+     * откуда все ушли, наблюдатель видеть обязан — иначе лента теряла бы прочитанное задним
+     * числом, а правило зависело бы от момента запроса.
+     */
+    private LinkedHashSet<InboxSubject> observers(Game game, ChatKind kind, UUID chatId) {
+        if (!historyOpensToObservers(kind, chatId)) {
+            return new LinkedHashSet<>();
+        }
         LinkedHashSet<InboxSubject> subjects = new LinkedHashSet<>();
         for (Membership membership : memberships.findByGame(game.id())) {
             if (membership.role() == MembershipRole.OBSERVER && membership.joined()) {
@@ -227,6 +240,13 @@ public class InboxMaterializer {
             }
         }
         return subjects;
+    }
+
+    private boolean historyOpensToObservers(ChatKind kind, UUID chatId) {
+        if (!openToObservers(kind)) {
+            return false;
+        }
+        return kind == ChatKind.FINAL || chatId == null || presence.hasPlayableHistory(chatId);
     }
 
     private List<InboxSubject> masterOnly(Game game) {
@@ -254,6 +274,16 @@ public class InboxMaterializer {
     /** Открытый контент — то, что видит наблюдатель: локации и финальное обсуждение (`D-063`). */
     public static boolean openToObservers(ChatKind kind) {
         return kind == ChatKind.LOCATION || kind == ChatKind.FINAL;
+    }
+
+    /**
+     * Открыт ли конкретный чат наблюдателю: мало типа, нужна ещё история (`D-129`).
+     * Единственная точка ответа — этот метод, потому что тот же вопрос задают лента,
+     * список каналов и граф, а разойдись они, наблюдатель увидел бы чат в одном месте
+     * и не увидел в другом.
+     */
+    public boolean openToObserver(ChatKind kind, UUID chatId) {
+        return historyOpensToObservers(kind, chatId);
     }
 
     /**

@@ -88,6 +88,18 @@ public class CharacterRepository {
                 membershipId);
     }
 
+    /**
+     * Занятие и освобождение слота (`D-100`). Одно поле на персонажа: «один игрок на слот»
+     * выражено схемой, а не проверкой, поэтому второй захват не может записаться поверх
+     * первого — вторая транзакция увидит занятое значение под блокировкой строки.
+     */
+    public void setOccupant(UUID characterId, UUID membershipId) {
+        jdbc.update(
+                "UPDATE character SET occupant_membership_id = ?, updated_at = now() WHERE id = ?",
+                membershipId,
+                characterId);
+    }
+
     /** Обновление карточки целиком: частичная запись полей разошлась бы со снимком у читателей. */
     public void updateCard(Character character) {
         jdbc.update(

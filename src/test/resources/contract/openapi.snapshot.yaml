@@ -811,6 +811,83 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters/{characterId}/occupation:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    put:
+      summary: Занятие персонажа игроком
+      description: |
+        `PUT`, а не `POST`: вызов задаёт итоговое состояние слота, и повтор ничего не
+        меняет. Захват идёт под блокировкой строки персонажа, поэтому двух победителей в
+        гонке не бывает (`D-100`); чужой занятый слот отвергается кодом
+        `character_occupied`. Ограничения «один персонаж на игрока» нет (`PLAN` E13,
+        задача 2). Событие — `CHARACTER_OCCUPIED` (`D-128`).
+      operationId: occupyCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Слот занят
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      summary: Освобождение персонажа
+      description: |
+        Слот становится свободным и может достаться другому, присутствие персонажа
+        закрывается. Событие — `CHARACTER_RELEASED` (`D-128`).
+      operationId: releaseCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Слот свободен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Character' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/characters/{characterId}/move:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/CharacterId'
+    post:
+      summary: Перемещение своим персонажем по переходу
+      description: |
+        Игрок идёт только своим персонажем и только по переходу, который для него
+        `AVAILABLE` (`REQUIREMENTS §8`, `D-107`). Направление берётся у ребра, а не у
+        клиента: иначе игрок указал бы «откуда», и проверка «вы стоите именно там»
+        обходилась бы. События — `CHARACTER_LEFT` и `CHARACTER_ENTERED`.
+      operationId: moveCharacter
+      tags: [character]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CharacterMoveRequest' }
+      responses:
+        '200':
+          description: Положение установлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Placement' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/storages:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -1738,6 +1815,210 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/memberships:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Состав игры
+      description: |
+        Мастеру — весь состав, участнику — только своё участие (`REQUIREMENTS §6`).
+        Мастер не выходит из игры и не банится (`D-133`).
+      operationId: listMemberships
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Состав глазами запросившего
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/memberships/invitations:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Приглашение в игру
+      description: |
+        Только мастер; адрес — логин существующего аккаунта, поэтому неизвестный логин
+        отвергается кодом `unknown_login` до всякой записи (`D-131`). Приглашение
+        бронирует слот (`reservedCharacterId`), но не занимает его (`D-130`);
+        `characterId` необязателен, и брони без него не возникает. Роль по умолчанию
+        `PLAYER`; `OBSERVER` открывает приватную игру для чтения и слот не бронирует.
+        Приглашение в `RUNNING` разрешено и отличается досчётом видимости (`D-086`).
+        Повтор с тем же слотом идемпотентен.
+      operationId: inviteToGame
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvitationRequest' }
+      responses:
+        '200':
+          description: Участие приглашено или приглашение обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/invitation/accept:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Согласие с приглашением
+      description: |
+        Слот занимается здесь и только здесь (`D-130`); приглашение наблюдателя брони не
+        имеет, и согласие такого участия — только смена статуса. Событие —
+        `MEMBERSHIP_JOINED`.
+      operationId: acceptInvitation
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Участие вошло в игру
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/invitation/decline:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Отказ от приглашения
+      description: |
+        `DECLINED`, а не выход: приглашённый в игру не входил (`D-123`). Бронь слота
+        снимается, и персонаж снова свободен. Событие — `MEMBERSHIP_DECLINED` (`D-128`).
+      operationId: declineInvitation
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Приглашение отклонено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/join:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Свободный вход в публичную игру
+      description: |
+        Открыт после `READY` и только в публичной игре: приватная отвечает `private_game`,
+        неготовая — `game_not_ready` (`D-132`). Роль выбирается по наличию свободного
+        играбельного персонажа без брони: свободного слота нет — вход наблюдателем.
+        Повтор идемпотентен; вошедшему игроку сразу открывается личный чат с мастером
+        (`D-037`).
+      operationId: joinOpenGame
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Участие вошло в игру
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/leave:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Добровольный выход из игры
+      description: |
+        Занятые слоты освобождаются, история персонажей, сообщений и заметок остаётся:
+        физического удаления нет (`D-009`). Мастер выйти не может (`D-133`).
+      operationId: leaveGame
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Участие вышло из игры
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/ban:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Бан участника в одной игре
+      description: |
+        `BANNED` — статус участия, а не глобальный запрет: другие игры человека это не
+        трогает (`D-133`). Бан освобождает слоты участия. Событие — `MEMBERSHIP_BANNED`.
+      operationId: banMember
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberLoginRequest' }
+      responses:
+        '200':
+          description: Участие забанено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/memberships/unban:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Снятие бана
+      description: |
+        Возвращает право входа, но не вводит человека в игру за него: участие переходит в
+        `LEFT` (`D-133`). Событие — `MEMBERSHIP_UNBANNED` (`D-128`).
+      operationId: unbanMember
+      tags: [membership]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberLoginRequest' }
+      responses:
+        '200':
+          description: Бан снят
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Membership' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/assets:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -2842,3 +3123,46 @@ components:
           type: array
           minItems: 1
           items: { type: string, format: uuid }
+    Membership:
+      type: object
+      description: |
+        Участие пользователя в игре (`REQUIREMENTS §6`). `reservedCharacterId` — слот,
+        обещанный приглашением: бронь живёт до согласия и занятостью не является (`D-130`).
+        Роль и статус отдаются строками: клиент переводит их по ключам интернализации,
+        а не сравнивает с числом (`D-081`).
+      required: [id, gameId, userId, role, status]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [MASTER, PLAYER, OBSERVER] }
+        status: { type: string, enum: [INVITED, JOINED, DECLINED, LEFT, BANNED] }
+        createdAt: { type: [string, 'null'], format: date-time }
+        joinedAt: { type: [string, 'null'], format: date-time }
+        leftAt: { type: [string, 'null'], format: date-time }
+        reservedCharacterId: { type: [string, 'null'], format: uuid }
+    InvitationRequest:
+      type: object
+      description: |
+        Цель адресуется логином существующего аккаунта (`D-131`): несуществующий логин
+        отвергается до всякой записи, поэтому в теле нет идентификатора, который клиент
+        мог бы выдумать.
+      required: [login]
+      properties:
+        login: { type: string, maxLength: 64 }
+        role: { type: [string, 'null'], enum: [PLAYER, OBSERVER] }
+        characterId: { type: [string, 'null'], format: uuid }
+    MemberLoginRequest:
+      type: object
+      description: Адресация участия логином для бана и снятия бана (`D-133`).
+      required: [login]
+      properties:
+        login: { type: string, maxLength: 64 }
+    CharacterMoveRequest:
+      type: object
+      description: |
+        В теле только переход: направление берётся у ребра, а не у клиента, иначе игрок
+        указал бы «откуда» и проверка «вы стоите именно там» обходилась бы.
+      required: [transitionId]
+      properties:
+        transitionId: { type: string, format: uuid }

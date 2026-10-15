@@ -546,6 +546,108 @@ case "$stage" in
       echo "  ok: E12 — контроллер тетради не пишет в доменные таблицы"
     fi
     ;;
+  E13)
+    # Участие — это разница между «позвали» и «вошёл», и проверки адресные: соблазн
+    # записать приглашение прямо в `character.occupant_membership_id` стирает эту разницу,
+    # и заметить её тестами занятия было бы нечем (`D-130`).
+    if [ -f src/main/resources/db/changelog/changes/008-e13.yaml ]; then
+      echo "  ok: E13 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E13 требует changes/008-e13.yaml (резерв слота и признак досчёта)"
+    fi
+    if grep -q '008-e13.yaml' src/main/resources/contract/changelog-manifest.txt; then
+      echo "  ok: E13 — отпечаток миграции внесён в манифест"
+    else
+      fail=1
+      echo "FAIL: E13 требует отпечаток 008-e13.yaml в changelog-manifest.txt"
+    fi
+    # Бронь — не занятость (`D-130`): уникальность держит база, потому что проверка
+    # «сначала прочитай, потом запиши» проигрывает гонку двум приглашениям.
+    if grep -rq 'ux_membership_reserved_character' src/main/resources/db/changelog/changes/008-e13.yaml \
+      && grep -rq 'reservedCharacterId' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E13 — приглашение бронирует слот, а не занимает его (D-130)"
+    else
+      fail=1
+      echo "FAIL: E13 требует брони слота на приглашении и её уникальности (D-130)"
+    fi
+    # Локация открывается наблюдателю историей, а не типом чата (`D-129`). Признак обязан
+    # жить в одном месте и спрашиваться и графом, и материалом видимости: разнеси его —
+    # наблюдатель увидит чат в одном ответе и не увидит в другом.
+    if grep -rq 'hasPlayableHistory' src/main/java/com/chattergame/character/PresenceRepository.java \
+      && grep -rq 'hasPlayableHistory' src/main/java/com/chattergame/message/InboxMaterializer.java \
+      && grep -rq 'hasPlayableHistory' src/main/java/com/chattergame/chat/ChatGraphService.java; then
+      echo "  ok: E13 — наблюдателю открыта история, а не все локации (D-129)"
+    else
+      fail=1
+      echo "FAIL: E13 требует признака истории присутствия в видимости и графе (D-129)"
+    fi
+    # Приглашение адресуется логином существующего аккаунта (`D-131`): несуществующий
+    # логин обязан отказать до записи, иначе в составе завёлся бы призрак.
+    if grep -rq 'unknown_login' src/main/java/com/chattergame/web/game/MembershipController.java \
+      && grep -rq 'Logins.normalize' src/main/java/com/chattergame/web/game/MembershipController.java; then
+      echo "  ok: E13 — приглашение адресуется логином существующего аккаунта (D-131)"
+    else
+      fail=1
+      echo "FAIL: E13 требует отказа unknown_login на неизвестный логин (D-131)"
+    fi
+    # Снятие бана возвращает право входа, а не вход (`D-133`): без отдельного события
+    # и статуса LEFT запрет снимался бы молча.
+    if grep -rq 'MEMBERSHIP_UNBANNED' src/main/java/com/chattergame/game/GameMutationService.java \
+      && grep -rq 'MEMBERSHIP_DECLINED' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E13 — отказ и снятие бана оставляют события (D-033, D-128)"
+    else
+      fail=1
+      echo "FAIL: E13 требует событий отказа и снятия бана (D-128)"
+    fi
+    # Захват слота идёт под блокировкой строки персонажа (`D-100`): иначе двое прочитали бы
+    # «свободен» и оба записали себя.
+    if grep -rq 'lockById' src/main/java/com/chattergame/game/GameMutationService.java \
+      && grep -rq 'FOR UPDATE' src/main/java/com/chattergame/character/CharacterRepository.java; then
+      echo "  ok: E13 — слот занимается под блокировкой строки (D-100)"
+    else
+      fail=1
+      echo "FAIL: E13 требует SELECT ... FOR UPDATE при занятии персонажа (D-100)"
+    fi
+    # Свободный вход открыт после READY и только в публичной игре (`D-132`).
+    if grep -rq 'private_game' src/main/java/com/chattergame/game/GameMutationService.java \
+      && grep -rq 'game_not_ready' src/main/java/com/chattergame/game/GameMutationService.java; then
+      echo "  ok: E13 — свободный вход ограничен публичной и готовой игрой (D-132)"
+    else
+      fail=1
+      echo "FAIL: E13 требует ограничений свободного входа (D-132)"
+    fi
+    # Веб-слой участия: приглашение, согласие, отказ, вход, выход, бан и снятие бана.
+    # Пути собираются из `@RequestMapping` класса и метода, поэтому проверяются хвосты.
+    if grep -q '"/games/{gameId}/memberships"' src/main/java/com/chattergame/web/game/MembershipController.java \
+      && grep -q '"/invitations"' src/main/java/com/chattergame/web/game/MembershipController.java \
+      && grep -q '"/join"' src/main/java/com/chattergame/web/game/MembershipController.java \
+      && grep -q '"/ban"' src/main/java/com/chattergame/web/game/MembershipController.java \
+      && grep -q '"/unban"' src/main/java/com/chattergame/web/game/MembershipController.java; then
+      echo "  ok: E13 — веб-слой участия на месте"
+    else
+      fail=1
+      echo "FAIL: E13 требует эндпоинты приглашения, входа, бана и снятия бана"
+    fi
+    # Контракт этапа: путь без описания — это эндпоинт, которого клиент не увидит, а
+    # снапшот ловит только расхождение двух файлов, а не пропущенный маршрут.
+    if grep -q '/games/{id}/memberships/join:' src/main/resources/openapi/openapi.yaml \
+      && grep -q '/games/{id}/characters/{characterId}/occupation:' src/main/resources/openapi/openapi.yaml \
+      && grep -q '/games/{id}/characters/{characterId}/move:' src/main/resources/openapi/openapi.yaml \
+      && grep -q '    Membership:' src/main/resources/openapi/openapi.yaml; then
+      echo "  ok: E13 — маршруты участия описаны в OpenAPI"
+    else
+      fail=1
+      echo "FAIL: E13 требует описания маршрутов участия и схемы Membership в openapi.yaml"
+    fi
+    # Контроллеры не пишут в доменные таблицы (`D-034`): участие меняется только событиями.
+    if grep -rnE 'jdbc\.(update|execute)\(' src/main/java/com/chattergame/web/game >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E13 — контроллер участия пишет в БД напрямую вместо GameMutationService"
+    else
+      echo "  ok: E13 — контроллер участия не пишет в доменные таблицы"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

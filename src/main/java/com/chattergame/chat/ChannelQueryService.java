@@ -35,6 +35,7 @@ public class ChannelQueryService {
     private final ChatMemberRepository members;
     private final MembershipRepository memberships;
     private final InboxRepository inbox;
+    private final InboxMaterializer visibility;
     private final GameQueryService games;
 
     public ChannelQueryService(
@@ -42,11 +43,13 @@ public class ChannelQueryService {
             ChatMemberRepository members,
             MembershipRepository memberships,
             InboxRepository inbox,
+            InboxMaterializer visibility,
             GameQueryService games) {
         this.chats = chats;
         this.members = members;
         this.memberships = memberships;
         this.inbox = inbox;
+        this.visibility = visibility;
         this.games = games;
     }
 
@@ -100,7 +103,9 @@ public class ChannelQueryService {
             // Наблюдателю закрытые каналы не видны (`D-063`), но финальное обсуждение —
             // открытый чат (`InboxMaterializer.openToObservers`), и шутить в нём ему можно
             // (`REQUIREMENTS §11`). Отказ был бы отказом в чате, который ему читают.
-            if (!InboxMaterializer.openToObservers(chat.kind())) {
+            // Локация открывается не типом, а историей: место, куда никто не входил,
+            // наблюдателю не показывается (`D-129`).
+            if (!visibility.openToObserver(chat.kind(), chat.id())) {
                 return null;
             }
             InboxSubject subject = InboxSubject.membership(membership.id());

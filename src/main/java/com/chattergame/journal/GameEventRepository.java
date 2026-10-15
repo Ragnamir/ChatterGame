@@ -132,6 +132,19 @@ public class GameEventRepository {
         return seq == null ? 0L : seq;
     }
 
+    /**
+     * Все события одного чата по возрастанию номера. Нужно досчёту видимости наблюдателя
+     * (`D-086`): историю чата нужно переписать в `inbox_entry`, и брать её можно только из
+     * журнала — он единственный источник, который не зависит от того, кому что было
+     * адресовано раньше.
+     */
+    public List<GameEvent> byChat(UUID chatId) {
+        return jdbc.query(
+                "SELECT " + COLUMNS + " FROM game_event WHERE chat_id = ? ORDER BY seq",
+                mapper,
+                chatId);
+    }
+
     public long countByGame(UUID gameId) {
         Long count = jdbc.queryForObject(
                 "SELECT count(*) FROM game_event WHERE game_id = ?", Long.class, gameId);

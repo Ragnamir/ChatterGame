@@ -143,6 +143,48 @@ public class CharacterController {
                 "hidden", stored.hidden());
     }
 
+    /**
+     * Занятие персонажа игроком (`PLAN` E13, задача 2). `PUT`, а не `POST`: вызов задаёт
+     * итоговое состояние слота, и повтор ничего не меняет. Захват идёт под блокировкой
+     * строки персонажа (`D-100`), поэтому двух победителей в гонке не бывает.
+     */
+    @PutMapping("/{characterId}/occupation")
+    public CharacterView occupy(
+            @PathVariable UUID gameId, @PathVariable UUID characterId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.claimCharacter(auth.user().id(), gameId, characterId);
+        return CharacterView.of(characters.card(auth.user().id(), gameId, characterId));
+    }
+
+    /** Освобождение своего персонажа: слот становится свободным и может достаться другому. */
+    @DeleteMapping("/{characterId}/occupation")
+    public CharacterView release(
+            @PathVariable UUID gameId, @PathVariable UUID characterId, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.releaseCharacter(auth.user().id(), gameId, characterId);
+        return CharacterView.of(characters.card(auth.user().id(), gameId, characterId));
+    }
+
+    /**
+     * Перемещение своим персонажем по открытому переходу (`REQUIREMENTS §8`). Мастер двигает
+     * кого угодно куда угодно (`PUT /location`), игрок идёт только по ребру, которое для
+     * этого персонажа `AVAILABLE`.
+     */
+    @PostMapping("/{characterId}/move")
+    public Map<String, Object> move(
+            @PathVariable UUID gameId,
+            @PathVariable UUID characterId,
+            @Valid @RequestBody CharacterMoveRequest request,
+            AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        Presence placed = mutations.moveCharacter(
+                auth.user().id(), gameId, characterId, request.transitionId());
+        return Map.of(
+                "characterId", placed.characterId().toString(),
+                "chatId", placed.chatId().toString(),
+                "hidden", placed.hidden());
+    }
+
     @DeleteMapping("/{characterId}")
     public ResponseEntity<Void> delete(
             @PathVariable UUID gameId, @PathVariable UUID characterId, AuthContext context) {
