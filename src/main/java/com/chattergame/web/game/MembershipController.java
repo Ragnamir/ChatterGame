@@ -61,7 +61,10 @@ public class MembershipController {
         List<Membership> visible = mine.role() == MembershipRole.MASTER
                 ? memberships.findByGame(gameId)
                 : List.of(mine);
-        return visible.stream().map(MembershipView::of).toList();
+        // Состав показывает пожелания по отыгрышу: мастеру — как материал для распределения
+        // ролей (`REQUIREMENTS §17`), участнику — своё. Чужого текста здесь не бывает:
+        // не-мастеру отдаётся ровно одна строка состава, его собственная (`D-139`).
+        return visible.stream().map(MembershipView::withWishes).toList();
     }
 
     /** Приглашение мастера (`D-131`). Повтор с тем же слотом идемпотентен. */

@@ -1,0 +1,44 @@
+databaseChangeLog:
+  # E14: change set engine и заявки игроков.
+  # Применённые `001-baseline.yaml` … `008-e13.yaml` не редактируются никогда (`AGENTS §1`).
+  #
+  # Таблицы заявок заведены заранее и не трогаются: `request` и `request_operation` описаны
+  # в baseline (`001-29`, `001-30`) со всем, что перечисляет `REQUIREMENTS §17`, — `origin`,
+  # `type`, `payload`, `status`, `error`, `idempotency_key`, `expires_at`, а у операции
+  # `ordinal`, `op`, `old_value`. Это тот же случай, что `E06`, `E07`, `E08` (`D-103`):
+  # источник истины — контракт `contract/expected-tables.txt`, а не перечень в `PLAN`.
+  #
+  # Недостаёт двух вещей.
+  #
+  # 1. «Пожелания по отыгрышу» при занятии персонажа (`REQUIREMENTS §17`). Живут на участии,
+  #    а не на карточке персонажа (`D-139`): текст пишет игрок, а карточка — содержимое
+  #    мастера, и смешивать их значило бы пустить игрока в канон. Лимит — тот же приём, что
+  #    у `item.quantity` (`004-e07.yaml`): сырой `sql`, потому что `addCheckConstraint` —
+  #    changeset Liquibase Pro.
+  # 2. Выборка просроченных заявок. Срок жизни обязателен (`PLAN` E14, задача 6), а
+  #    автоотклонение читает только `PENDING` с прошедшим `expires_at`: незакрытые строки
+  #    копятся, закрытые — почти вся таблица. Частичный индекс отсекает их на входе, как
+  #    `ix_restriction_active` (`005-e08.yaml`).
+  #
+  #    Предикат задан сырым `sql`: `createIndex` в Liquibase OSS предикат `where` молча
+  #    игнорирует, и индекс получается полным (`005-e08.yaml`).
+
+  - changeSet:
+      id: 009-01-membership-roleplay-wishes
+      author: e14
+      changes:
+        - addColumn:
+            tableName: membership
+            columns:
+              - column: { name: roleplay_wishes, type: text }
+        - sql:
+            sql: ALTER TABLE membership ADD CONSTRAINT chk_membership_roleplay_wishes_length CHECK (char_length(roleplay_wishes) <= 500)
+            rollback: ALTER TABLE membership DROP CONSTRAINT chk_membership_roleplay_wishes_length
+
+  - changeSet:
+      id: 009-02-request-pending-expires
+      author: e14
+      changes:
+        - sql:
+            sql: CREATE INDEX ix_request_pending_expires ON request (expires_at) WHERE status = 'PENDING'
+            rollback: DROP INDEX ix_request_pending_expires

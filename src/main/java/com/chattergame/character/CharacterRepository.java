@@ -116,6 +116,18 @@ public class CharacterRepository {
                 character.id());
     }
 
+    /**
+     * Правка одного текстового поля карточки (`E14`): заявка меняет ровно то, что назвала,
+     * и остальные поля остаются чужими правками нетронутыми. Колонка берётся из словаря
+     * {@link CharacterField}, а не из строки запроса, — имени поля из payload в SQL нет.
+     */
+    public void updateField(UUID id, CharacterField field, String value) {
+        jdbc.update(
+                "UPDATE character SET " + field.column() + " = ?, updated_at = now() WHERE id = ?",
+                value,
+                id);
+    }
+
     public void markArchived(UUID id, String reason) {
         jdbc.update(
                 "UPDATE character SET archived = true, archived_reason = ?, updated_at = now() "

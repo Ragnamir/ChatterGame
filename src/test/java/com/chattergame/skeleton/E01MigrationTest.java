@@ -29,7 +29,7 @@ class E01MigrationTest {
     void migrateFromScratchAppliesAllChanges() {
         assertThat(PostgresTestSupport.appliedChangeSetCount())
                 .as("changeset-ов должно примениться ровно столько, сколько в changelog")
-                .isEqualTo(51);
+                .isEqualTo(53);
     }
 
     @Test

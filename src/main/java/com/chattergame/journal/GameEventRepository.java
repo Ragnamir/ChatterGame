@@ -151,6 +151,24 @@ public class GameEventRepository {
         return count == null ? 0L : count;
     }
 
+    /**
+     * Событие мутации, применённой операцией заявки. Операция помечает своё событие
+     * `payload.operationId` (`D-138`), и по этой метке откат находит прежнее значение
+     * в журнале, а не в доменной таблице, которую сам же и собирается менять (`D-033`).
+     * Поиск идёт по `jsonb`-полю: отдельная колонка под метку заводила бы второй индекс
+     * ради одного читателя, тогда как применение операции — редкая операция.
+     */
+    public java.util.Optional<GameEvent> findByOperationId(UUID gameId, UUID operationId) {
+        return jdbc.query(
+                        "SELECT " + COLUMNS + " FROM game_event WHERE game_id = ? "
+                                + "AND payload ->> 'operationId' = ? ORDER BY seq DESC LIMIT 1",
+                        mapper,
+                        gameId,
+                        operationId.toString())
+                .stream()
+                .findFirst();
+    }
+
     private GameEvent map(ResultSet rs, int rowNum) throws SQLException {
         return new GameEvent(
                 rs.getObject("id", UUID.class),

@@ -648,6 +648,72 @@ case "$stage" in
       echo "  ok: E13 — контроллер участия не пишет в доменные таблицы"
     fi
     ;;
+  E14)
+    # Миграция этапа: колонка пожеланий и частичный индекс просрочки — то, без чего
+    # ни задача 5, ни задача 6 не выполняются на уровне схемы.
+    if [ -f src/main/resources/db/changelog/changes/009-e14.yaml ]; then
+      echo "  ok: E14 — миграция этапа присутствует"
+    else
+      fail=1
+      echo "FAIL: E14 требует changes/009-e14.yaml (пожелания по отыгрышу, индекс просрочки)"
+    fi
+    # Одно горло для трёх источников (`D-040`): машина применения живёт в сервисе заявок,
+    # а не в контроллере, и словарь операций — в домене, а не в разборе запроса.
+    if grep -rq 'class RequestService' src/main/java/com/chattergame/request \
+      && grep -rq 'enum ChangeOperationType' src/main/java/com/chattergame/request; then
+      echo "  ok: E14 — движок change set на месте"
+    else
+      fail=1
+      echo "FAIL: E14 требует RequestService и словарь операций change set"
+    fi
+    # Применение идёт мутациями GameMutationService (`D-034`), а не своим SQL, и каждая
+    # операция — своей транзакцией (`D-137`).
+    if grep -rq 'mutations\.' src/main/java/com/chattergame/request/RequestService.java \
+      && grep -rq 'applyCharacterFieldEdit' src/main/java/com/chattergame/request/RequestService.java; then
+      echo "  ok: E14 — применение идёт через GameMutationService (D-034)"
+    else
+      fail=1
+      echo "FAIL: E14 требует применения операций через GameMutationService (D-034)"
+    fi
+    # Откат читает прежнее значение из журнала (`D-138`), а не из таблицы, которую меняет.
+    if grep -rq 'oldValueFromJournal' src/main/java/com/chattergame/request/RequestService.java \
+      && grep -rq 'findByOperationId' src/main/java/com/chattergame/journal/GameEventRepository.java; then
+      echo "  ok: E14 — откат берёт старое значение из журнала (D-138)"
+    else
+      fail=1
+      echo "FAIL: E14 требует чтения прежнего значения из журнала при откате (D-138)"
+    fi
+    # Срок жизни истекает сам, а проверяет его планировщик, а не зашедший автор (`D-137`).
+    if grep -rq '@Scheduled' src/main/java/com/chattergame/request; then
+      echo "  ok: E14 — просрочка заявок проверяется планировщиком"
+    else
+      fail=1
+      echo "FAIL: E14 требует планировщика просрочки заявок (D-137)"
+    fi
+    # Заявка игрока не меняет мир: решение начинается с проверки мастера.
+    if grep -rq 'requireMaster' src/main/java/com/chattergame/request/RequestService.java; then
+      echo "  ok: E14 — решение по заявке проверяет мастера"
+    else
+      fail=1
+      echo "FAIL: E14 требует проверки мастера в решении по заявке"
+    fi
+    # Контракт этапа: маршруты заявок и схема Membership с пожеланиями описаны в OpenAPI.
+    if grep -q '/games/{id}/requests:' src/main/resources/openapi/openapi.yaml \
+      && grep -q '/games/{id}/requests/{requestId}/decision:' src/main/resources/openapi/openapi.yaml \
+      && grep -q 'roleplayWishes' src/main/resources/openapi/openapi.yaml; then
+      echo "  ok: E14 — маршруты заявок описаны в OpenAPI"
+    else
+      fail=1
+      echo "FAIL: E14 требует описания маршрутов заявок и пожеланий в openapi.yaml"
+    fi
+    # Контроллеры заявок не пишут в доменные таблицы (`D-034`).
+    if grep -rnE 'jdbc\.(update|execute)\(' src/main/java/com/chattergame/web/request >/dev/null 2>&1; then
+      fail=1
+      echo "FAIL: E14 — контроллер заявок пишет в БД напрямую вместо GameMutationService"
+    else
+      echo "  ok: E14 — контроллер заявок не пишет в доменные таблицы"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

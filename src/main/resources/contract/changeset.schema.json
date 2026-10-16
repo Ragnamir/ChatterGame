@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chattergame.local/contract/changeset.schema.json",
+  "title": "Change set заявки",
+  "description": "Типизированный набор правок мира (D-041). Заявка игрока, правка мастера и предложение модели приходят одним форматом, поэтому машина применения одна (D-040). Проверяется до применения: невалидный payload переводит заявку в FAILED, а не применяется частично (D-043). Словарь операций читается кодом — расхождение перечисления ChangeOperationType с этим файлом валит тест E14ChangeSetTest. Поле payload операции намеренно не описано по полям: его форма зависит от операции и описана здесь же в $defs, а обязательные поля проверяет тот же словарь, что применяет операцию.",
+  "type": "object",
+  "required": ["operations"],
+  "additionalProperties": false,
+  "properties": {
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "description": "Правки по порядку применения. Порядок — часть смысла: create_item кладёт предмет в хранилище, move_character требует персонажа на месте. Откат идёт обратным порядком.",
+      "items": {
+        "type": "object",
+        "required": ["op", "payload"],
+        "additionalProperties": false,
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "update_character_field",
+              "create_item",
+              "move_character",
+              "post_master_message",
+              "update_storage_contents",
+              "create_note"
+            ]
+          },
+          "payload": { "type": "object", "additionalProperties": true }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "update_character_field": {
+      "description": "Правка одного текстового поля карточки. Правке доступны name, appearance, publicHistory, privateHistory: остальные поля — структура карточки, а не текст.",
+      "type": "object",
+      "required": ["characterId", "field", "value"],
+      "properties": {
+        "characterId": { "type": "string", "format": "uuid" },
+        "field": { "type": "string", "enum": ["name", "appearance", "publicHistory", "privateHistory"] },
+        "value": { "type": ["string", "null"], "maxLength": 20000 }
+      }
+    },
+    "create_item": {
+      "description": "Предмет заводится сразу в хранилище: предмета вне хранилища не бывает. Количество у неисчисляемого типа всегда 1 (D-114).",
+      "type": "object",
+      "required": ["storageId", "name", "size"],
+      "properties": {
+        "storageId": { "type": "string", "format": "uuid" },
+        "type": {
+          "type": "string",
+          "enum": ["WEAPON", "ARMOR", "CLOTHING", "TOOL", "DOCUMENT", "KEY", "VALUABLE", "CONSUMABLE", "MONEY", "QUEST", "MISC"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": ["string", "null"] },
+        "size": { "type": "string", "enum": ["SMALL", "LARGE"] },
+        "quantity": { "type": ["integer", "null"], "minimum": 1 },
+        "properties": { "type": ["string", "null"] }
+      }
+    },
+    "move_character": {
+      "description": "Перемещение персонажа по переходу. Направление берётся у ребра, а не у клиента: иначе игрок указал бы «откуда» (D-107).",
+      "type": "object",
+      "required": ["characterId", "transitionId"],
+      "properties": {
+        "characterId": { "type": "string", "format": "uuid" },
+        "transitionId": { "type": "string", "format": "uuid" }
+      }
+    },
+    "post_master_message": {
+      "description": "Мастерское сообщение в чат. Пишется от лица мастера, а не от персонажа: отзыв сообщений запрещён (D-008), поэтому операция необратима.",
+      "type": "object",
+      "required": ["chatId", "body"],
+      "properties": {
+        "chatId": { "type": "string", "format": "uuid" },
+        "body": { "type": "string", "minLength": 1, "maxLength": 4000 }
+      }
+    },
+    "update_storage_contents": {
+      "description": "Название и описание хранилища. Открытость сюда не входит: это доступ, а не содержимое (D-110).",
+      "type": "object",
+      "required": ["storageId"],
+      "anyOf": [{ "required": ["title"] }, { "required": ["description"] }],
+      "properties": {
+        "storageId": { "type": "string", "format": "uuid" },
+        "title": { "type": ["string", "null"], "maxLength": 200 },
+        "description": { "type": ["string", "null"] }
+      }
+    },
+    "create_note": {
+      "description": "Заметка тетради. Откат невозможен: заметка только заводит строку (D-055).",
+      "type": "object",
+      "required": ["body"],
+      "properties": {
+        "body": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "targetKind": { "type": "string", "enum": ["CHARACTER", "MEMBERSHIP"] },
+        "targetId": { "type": "string", "format": "uuid" },
+        "keywords": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "required": ["raw"],
+            "properties": {
+              "raw": { "type": "string", "minLength": 1 },
+              "exactMatch": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

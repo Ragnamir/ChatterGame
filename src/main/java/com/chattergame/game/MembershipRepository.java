@@ -22,7 +22,8 @@ import java.util.UUID;
 public class MembershipRepository {
 
     private static final String COLUMNS =
-            "id, game_id, user_id, role, status, created_at, joined_at, left_at, reserved_character_id";
+            "id, game_id, user_id, role, status, created_at, joined_at, left_at, reserved_character_id, "
+                    + "roleplay_wishes";
 
     private final JdbcTemplate jdbc;
     private final RowMapper<Membership> mapper = this::map;
@@ -34,7 +35,7 @@ public class MembershipRepository {
     public void insert(Membership membership) {
         jdbc.update(
                 "INSERT INTO membership (id, game_id, user_id, role, status, created_at, joined_at, "
-                        + "left_at, reserved_character_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        + "left_at, reserved_character_id, roleplay_wishes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 membership.id(),
                 membership.gameId(),
                 membership.userId(),
@@ -43,19 +44,32 @@ public class MembershipRepository {
                 Timestamp.from(membership.createdAt()),
                 membership.joinedAt() == null ? null : Timestamp.from(membership.joinedAt()),
                 membership.leftAt() == null ? null : Timestamp.from(membership.leftAt()),
-                membership.reservedCharacterId());
+                membership.reservedCharacterId(),
+                membership.roleplayWishes());
     }
 
     public void updateStatus(Membership membership) {
         jdbc.update(
                 "UPDATE membership SET status = ?, joined_at = ?, left_at = ?, role = ?, "
-                        + "reserved_character_id = ? WHERE id = ?",
+                        + "reserved_character_id = ?, roleplay_wishes = ? WHERE id = ?",
                 membership.status().name(),
                 membership.joinedAt() == null ? null : Timestamp.from(membership.joinedAt()),
                 membership.leftAt() == null ? null : Timestamp.from(membership.leftAt()),
                 membership.role().name(),
                 membership.reservedCharacterId(),
+                membership.roleplayWishes(),
                 membership.id());
+    }
+
+    /**
+     * «Пожелания по отыгрышу» (REQUIREMENTS §17): свободный текст игрока, который мастер
+     * читает при распределении ролей. Отдельный `UPDATE`, а не перезапись строки целиком:
+     * пожелание меняет сам игрок, и статус участия при этом не трогается — иначе запись
+     * пожелания затирала бы решение мастера о бане или выходе, принятое между чтением и записью.
+     */
+    public void updateRoleplayWishes(UUID membershipId, String wishes) {
+        jdbc.update(
+                "UPDATE membership SET roleplay_wishes = ? WHERE id = ?", wishes, membershipId);
     }
 
     public Optional<Membership> find(UUID gameId, UUID userId) {
@@ -123,6 +137,7 @@ public class MembershipRepository {
                 rs.getTimestamp("created_at").toInstant(),
                 joinedAt == null ? null : joinedAt.toInstant(),
                 leftAt == null ? null : leftAt.toInstant(),
-                rs.getObject("reserved_character_id", UUID.class));
+                rs.getObject("reserved_character_id", UUID.class),
+                rs.getString("roleplay_wishes"));
     }
 }

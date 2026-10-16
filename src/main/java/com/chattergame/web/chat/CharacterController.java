@@ -144,15 +144,26 @@ public class CharacterController {
     }
 
     /**
-     * Занятие персонажа игроком (`PLAN` E13, задача 2). `PUT`, а не `POST`: вызов задаёт
-     * итоговое состояние слота, и повтор ничего не меняет. Захват идёт под блокировкой
-     * строки персонажа (`D-100`), поэтому двух победителей в гонке не бывает.
+     * Занятие персонажа игроком (`PLAN` E13, задача 2; `PLAN` E14, задача 5). `PUT`, а не
+     * `POST`: вызов задаёт итоговое состояние слота, и повтор ничего не меняет. Захват идёт
+     * под блокировкой строки персонажа (`D-100`), поэтому двух победителей в гонке не бывает.
+     *
+     * <p>Тело необязательно: «пожелания по отыгрышу» — свободный текст игрока мастеру
+     * (`REQUIREMENTS §17`), и занятие без них законно. Тело необязательно именно поэтому:
+     * требовать его значило бы превратить пожелание в обязанность.
      */
     @PutMapping("/{characterId}/occupation")
     public CharacterView occupy(
-            @PathVariable UUID gameId, @PathVariable UUID characterId, AuthContext context) {
+            @PathVariable UUID gameId,
+            @PathVariable UUID characterId,
+            @RequestBody(required = false) OccupationRequest request,
+            AuthContext context) {
         AuthContext auth = AuthContextResolver.require(context);
-        mutations.claimCharacter(auth.user().id(), gameId, characterId);
+        mutations.claimCharacter(
+                auth.user().id(),
+                gameId,
+                characterId,
+                request == null ? null : request.roleplayWishes());
         return CharacterView.of(characters.card(auth.user().id(), gameId, characterId));
     }
 

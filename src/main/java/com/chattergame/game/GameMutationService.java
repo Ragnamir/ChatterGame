@@ -12,6 +12,7 @@ import com.chattergame.chat.TransitionRepository;
 import com.chattergame.chat.TransitionState;
 import com.chattergame.chat.TransitionStateRepository;
 import com.chattergame.character.Character;
+import com.chattergame.character.CharacterField;
 import com.chattergame.character.CharacterRepository;
 import com.chattergame.character.Presence;
 import com.chattergame.character.PresenceRepository;
@@ -423,6 +424,7 @@ public class GameMutationService {
                 now,
                 status == MembershipStatus.JOINED ? now : null,
                 status == MembershipStatus.LEFT ? now : null,
+                null,
                 null);
         memberships.insert(membership);
         event(gameId, eventTypeOf(status), actorUserId, payload("userId", userId.toString()));
@@ -518,7 +520,8 @@ public class GameMutationService {
                     now,
                     null,
                     null,
-                    reserved);
+                    reserved,
+                    null);
             memberships.insert(membership);
         } else {
             membership = existing
@@ -623,7 +626,7 @@ public class GameMutationService {
         Membership membership;
         if (existing == null) {
             membership = new Membership(
-                    Uuids.v7(), gameId, userId, role, MembershipStatus.JOINED, now, now, null, null);
+                    Uuids.v7(), gameId, userId, role, MembershipStatus.JOINED, now, now, null, null, null);
             memberships.insert(membership);
         } else {
             membership = existing.withRole(role).withStatus(MembershipStatus.JOINED, now);
@@ -706,6 +709,22 @@ public class GameMutationService {
      */
     @Transactional
     public Character claimCharacter(UUID userId, UUID gameId, UUID characterId) {
+        return claimCharacter(userId, gameId, characterId, null);
+    }
+
+    /**
+     * Занятие персонажа вместе с «пожеланиями по отыгрышу» (`REQUIREMENTS §17`). Пожелание —
+     * свободный текст игрока, который мастер читает при распределении ролей; оно не канон,
+     * поэтому живёт на участии (`D-139`), а не на карточке, и пишется той же транзакцией,
+     * что и занятие: раздельные вызовы оставляли бы слот занятым без пожелания при обрыве.
+     *
+     * <p>Пустая строка и `null` значат разное: `null` — «не указал вовсе», пустая — «стёр
+     * написанное». Оба состояния законны, поэтому заполнение идёт отдельным `UPDATE`
+     * колонки, а не перезаписью строки участия целиком: иначе запись пожелания затирала бы
+     * решение мастера о бане или выходе, принятое между чтением и записью.
+     */
+    @Transactional
+    public Character claimCharacter(UUID userId, UUID gameId, UUID characterId, String roleplayWishes) {
         Game game = requireGameForMember(userId, gameId);
         requireNotFinished(game, "game_finished", "Игра завершена: персонажа не занять");
         Membership membership = requireJoined(gameId, userId, "not_joined", "Сначала войдите в игру");
@@ -713,7 +732,21 @@ public class GameMutationService {
             throw ApiException.forbidden(
                     "observer_cannot_occupy", "Наблюдатель не занимает персонажа: он читает игру");
         }
+        if (roleplayWishes != null) {
+            memberships.updateRoleplayWishes(membership.id(), requireWishes(roleplayWishes));
+        }
         return claimCharacter(gameId, membership, characterId, true);
+    }
+
+    /** Предел текста пожеланий проверяется на сервисе ради машинного кода, не только базой. */
+    private static String requireWishes(String wishes) {
+        String normalized = wishes.strip();
+        if (normalized.length() > Membership.ROLEPLAY_WISHES_MAX) {
+            throw ApiException.badRequest(
+                    "wishes_too_long",
+                    "Пожелания по отыгрышу: до " + Membership.ROLEPLAY_WISHES_MAX + " знаков");
+        }
+        return normalized.isEmpty() ? null : normalized;
     }
 
     /**
@@ -1178,7 +1211,14 @@ public class GameMutationService {
             boolean npc) {
         Game game = requireMaster(actorUserId, gameId);
         requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
-        Character character = requireCharacter(gameId, characterId);
+        // Карточка пишется целиком, поэтому строка берётся под `FOR UPDATE`, а не обычным
+        // чтением: иначе правка карточки и одобрение заявки на то же поле прочли бы одну
+        // версию строки и вторая запись затёрла бы первую (`D-034`).
+        Character character = characters.lockById(characterId)
+                .orElseThrow(() -> ApiException.notFound("character_not_found", "Персонаж не найден"));
+        if (!character.gameId().equals(gameId)) {
+            throw ApiException.notFound("character_not_found", "Персонаж не найден");
+        }
         requireText(name, "character_name_required", "Укажите имя персонажа", Character.NAME_MAX);
         requirePortraitOfGame(gameId, portraitAssetId);
 
@@ -1321,6 +1361,20 @@ public class GameMutationService {
 
     private Presence placeCharacterInternal(
             Game game, UUID actorUserId, UUID characterId, UUID chatId) {
+        return placeCharacterInternal(game, actorUserId, characterId, chatId, Map.of());
+    }
+
+    /**
+     * Та же постановка, но с добавочными полями в payload обоих событий (`E14`): откату
+     * заявки нужна прежняя локация, а взять её можно только из журнала — восстанавливать
+     * состояние по таблице значило бы восстанавливать по тому, что откат и меняет (`D-033`).
+     */
+    private Presence placeCharacterInternal(
+            Game game,
+            UUID actorUserId,
+            UUID characterId,
+            UUID chatId,
+            Map<String, Object> extras) {
         requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
         Character character = requireCharacter(game.id(), characterId);
         if (character.archived()) {
@@ -1340,7 +1394,7 @@ public class GameMutationService {
         if (current != null) {
             presence.close(current.id());
             eventInChat(game.id(), GameEventType.CHARACTER_LEFT, actorUserId, current.chatId(), characterId,
-                    placementPayload(characterId, current));
+                    withExtras(placementPayload(characterId, current), extras));
         }
         // Скрытность переезжает вместе с персонажем: иначе перемещение скрытого персонажа
         // молча показало бы его всем в новой локации (`D-007`).
@@ -1348,8 +1402,18 @@ public class GameMutationService {
         Presence placed = new Presence(Uuids.v7(), characterId, location.id(), hidden, Instant.now(), null);
         presence.insert(placed);
         eventInChat(game.id(), GameEventType.CHARACTER_ENTERED, actorUserId, placed.chatId(), characterId,
-                placementPayload(characterId, placed));
+                withExtras(placementPayload(characterId, placed), extras));
         return placed;
+    }
+
+    private static Map<String, Object> withExtras(
+            Map<String, Object> payload, Map<String, Object> extras) {
+        if (extras.isEmpty()) {
+            return payload;
+        }
+        Map<String, Object> merged = new LinkedHashMap<>(payload);
+        merged.putAll(extras);
+        return merged;
     }
 
     /**
@@ -2459,8 +2523,20 @@ public class GameMutationService {
             UUID chatId,
             UUID characterId,
             Map<String, Object> payload) {
+        eventInChatSeq(gameId, type, actorUserId, chatId, characterId, payload);
+    }
+
+    /** Та же запись, но с возвратом номера: он нужен там, где номер события — часть ответа. */
+    private long eventInChatSeq(
+            UUID gameId,
+            GameEventType type,
+            UUID actorUserId,
+            UUID chatId,
+            UUID characterId,
+            Map<String, Object> payload) {
         long seq = record(gameId, type, actorUserId, chatId, characterId, false, payload);
         projectSystem(gameId, type, chatId, seq);
+        return seq;
     }
 
     /**
@@ -2490,6 +2566,21 @@ public class GameMutationService {
     }
 
     /**
+     * Событие, у которого нет чужой транзакции: решение по заявке, её просрочка и откат.
+     *
+     * <p>Отличие от {@link #appendEvent} — только в распространении транзакции, и оно
+     * принципиальное. Решение по заявке идёт <em>вне</em> транзакции: каждая операция
+     * применяется своей, иначе первая неудачная откатила бы уже применённые (`D-137`).
+     * `MANDATORY` в такой точке упал бы на отсутствии транзакции, а `REQUIRED` открывает
+     * свою — журнал получает запись, не затягивая в транзакцию применение операций.
+     */
+    @Transactional
+    public long appendStandaloneEvent(
+            UUID gameId, GameEventType type, UUID actorUserId, Map<String, Object> payload) {
+        return record(gameId, type, actorUserId, null, null, false, payload);
+    }
+
+    /**
      * Запись события сообщения: у него есть чат, автор-персонаж и признак «от лица
      * мастера» (`D-005`), а номер выдаётся тем же счётчиком, что и у прочих мутаций
      * (`D-033`). Вызывается из {@code MessageService} внутри его транзакции.
@@ -2504,6 +2595,193 @@ public class GameMutationService {
             UUID characterId,
             boolean onBehalfOfMaster) {
         return record(gameId, type, actorUserId, chatId, characterId, onBehalfOfMaster, payload);
+    }
+
+    // --- Применение change set (E14) ----------------------------------------------------
+
+    /**
+     * Правка одного поля карточки заявкой (`PLAN` E14, задача 3). Отдельный метод, а не
+     * {@code updateCharacterCard}, по двум причинам: карточка пишется целиком только из формы
+     * мастера, а заявка называет ровно одно поле — писать остальные её значениями значило бы
+     * затирать чужие правки, сделанные между созданием заявки и её одобрением. Вторая причина —
+     * старое значение: без него откат `D-041` нечего восстанавливать.
+     *
+     * <p>Строка читается под `FOR UPDATE`, а не обычным чтением: правка мастера и одобрение
+     * заявки на то же поле иначе теряли бы одну из записей (`D-034`, `D-100`).
+     */
+    @Transactional
+    public Map<String, Object> applyCharacterFieldEdit(
+            UUID actorUserId,
+            UUID gameId,
+            UUID characterId,
+            CharacterField field,
+            String value,
+            UUID requestId,
+            UUID operationId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Character locked = characters.lockById(characterId)
+                .orElseThrow(() -> ApiException.notFound("character_not_found", "Персонаж не найден"));
+        if (!locked.gameId().equals(gameId)) {
+            throw ApiException.notFound("character_not_found", "Персонаж не найден");
+        }
+        if (locked.archived()) {
+            throw ApiException.conflict(
+                    "character_archived", "Персонаж выведен из игры: правка невозможна");
+        }
+        String next = field == CharacterField.NAME
+                ? requireCharacterName(value)
+                : normalize(value);
+        String previous = field.valueIn(locked);
+        characters.updateField(characterId, field, next);
+
+        Map<String, Object> payload = payload("characterId", characterId.toString());
+        payload.put("field", field.wireName());
+        payload.put("value", next);
+        // Старое значение — объект, а не голое значение: откат обязан знать, какое поле
+        // восстанавливает, иначе он не отличит пустую строку от «поле не названо».
+        // Собирается изменяемой картой: `Map.of` не переживает null, а пустое поле — норма.
+        Map<String, Object> oldValue = new LinkedHashMap<>();
+        oldValue.put("field", field.wireName());
+        oldValue.put("value", previous);
+        payload.put("oldValue", oldValue);
+        markChangeSet(payload, requestId, operationId);
+        record(gameId, GameEventType.CHARACTER_CONTENT_CHANGED, actorUserId, null, null, false, payload);
+        return oldValue;
+    }
+
+    /**
+     * Перемещение персонажа по переходу по одобренной заявке (`PLAN` E14, задача 3). Мастер
+     * одобряет просьбу игрока, но не отменяет состояние мира: ребро обязано быть `AVAILABLE`
+     * и сейчас, иначе одобрение открыло бы закрытую дверь. Принудительное перемещение остаётся
+     * отдельным жестом мастера (`PUT /location`), а не одобрением заявки.
+     *
+     * <p>Направление берётся у ребра, а не из payload: иначе заявка указывала бы «откуда»
+     * и перемещение из локации, где персонажа нет, проходило бы проверку (`D-107`).
+     */
+    @Transactional
+    public Map<String, Object> applyCharacterMove(
+            UUID actorUserId,
+            UUID gameId,
+            UUID characterId,
+            UUID transitionId,
+            UUID requestId,
+            UUID operationId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Character character = requireCharacter(gameId, characterId);
+        if (character.archived()) {
+            throw ApiException.conflict(
+                    "character_archived", "Персонаж выведен из игры: перемещение невозможно");
+        }
+        Transition transition = requireTransition(gameId, transitionId);
+        if (transition.archived()) {
+            throw ApiException.conflict("transition_archived", "Переход выведен из игры");
+        }
+        Presence current = presence.findActive(characterId)
+                .orElseThrow(() -> ApiException.conflict(
+                        "character_not_placed", "Персонаж нигде не находится: идти неоткуда"));
+        if (!current.chatId().equals(transition.fromChatId())) {
+            throw ApiException.conflict("not_at_transition", "Переход начинается не там, где вы стоите");
+        }
+        EdgeState edge = edgeStates.find(transitionId, characterId).map(TransitionState::state)
+                .orElse(EdgeState.UNKNOWN);
+        if (edge != EdgeState.AVAILABLE) {
+            throw ApiException.forbidden(
+                    "transition_unavailable", "Этот переход для вашего персонажа закрыт");
+        }
+        UUID fromChatId = current.chatId();
+        Map<String, Object> oldValue = new LinkedHashMap<>();
+        oldValue.put("chatId", fromChatId.toString());
+        Map<String, Object> extras = new LinkedHashMap<>(oldValue);
+        extras.put("oldValue", oldValue);
+        extras.put("transitionId", transitionId.toString());
+        markChangeSet(extras, requestId, operationId);
+        placeCharacterInternal(game, actorUserId, characterId, transition.toChatId(), extras);
+        return oldValue;
+    }
+
+    /**
+     * Правка названия и описания хранилища заявкой (`PLAN` E14, задача 3). Открытость сюда
+     * не входит: это доступ, а не содержимое, и у неё свой тип события (`D-110`).
+     */
+    @Transactional
+    public Map<String, Object> applyStorageContentsEdit(
+            UUID actorUserId,
+            UUID gameId,
+            UUID storageId,
+            String title,
+            String description,
+            UUID requestId,
+            UUID operationId) {
+        Game game = requireMaster(actorUserId, gameId);
+        requireNotFinished(game, "content_change_after_finish", "После завершения игры мир не меняется");
+        Storage storage = requireStorage(gameId, storageId);
+        String nextTitle = title == null ? storage.title() : normalize(title);
+        String nextDescription = description == null ? storage.description() : normalize(description);
+        if (nextTitle != null && nextTitle.length() > Storage.TITLE_MAX) {
+            throw ApiException.badRequest(
+                    "title_too_long", "Название хранилища: до " + Storage.TITLE_MAX + " знаков");
+        }
+
+        Map<String, Object> oldValue = new LinkedHashMap<>();
+        oldValue.put("title", storage.title());
+        oldValue.put("description", storage.description());
+        storages.updateContent(storageId, nextTitle, nextDescription);
+
+        Map<String, Object> payload = payload("storageId", storageId.toString());
+        payload.put("title", nextTitle);
+        payload.put("description", nextDescription);
+        payload.put("oldValue", oldValue);
+        markChangeSet(payload, requestId, operationId);
+        eventInChatSeq(
+                gameId, GameEventType.STORAGE_CONTENT_CHANGED, actorUserId, storage.chatId(), null, payload);
+        return oldValue;
+    }
+
+    /**
+     * Отметка заявки в payload события. Идентификаторы операции нужны откату, чтобы найти
+     * прежнее значение в журнале, а не в отдельной таблице: журнал — источник истины (`D-033`).
+     */
+    private static void markChangeSet(
+            Map<String, Object> payload, UUID requestId, UUID operationId) {
+        if (requestId != null) {
+            payload.put("requestId", requestId.toString());
+        }
+        if (operationId != null) {
+            payload.put("operationId", operationId.toString());
+        }
+    }
+
+    private static String requireCharacterName(String value) {
+        requireText(value, "character_name_required", "Укажите имя персонажа", Character.NAME_MAX);
+        return value.strip();
+    }
+
+    /**
+     * Постановка персонажа в указанную локацию заявкой. Отдельно от {@code moveCharacter}
+     * и от {@link #placeCharacter}: это откат перемещения, и он обязан вернуть персонажа
+     * туда, где он был, даже если ребро за это время закрыли или архивировали. Проверять
+     * направление перехода при отмене неуместно: отмена не путешествие, а восстановление
+     * прежнего состояния — иначе откат необратимо застревал бы на мире, который изменился.
+     */
+    @Transactional
+    public Map<String, Object> applyCharacterPlacement(
+            UUID actorUserId,
+            UUID gameId,
+            UUID characterId,
+            UUID chatId,
+            UUID requestId,
+            UUID operationId) {
+        Game game = requireMaster(actorUserId, gameId);
+        Map<String, Object> oldValue = new LinkedHashMap<>();
+        presence.findActive(characterId).ifPresent(
+                current -> oldValue.put("chatId", current.chatId().toString()));
+        Map<String, Object> extras = new LinkedHashMap<>(oldValue);
+        extras.put("oldValue", oldValue);
+        markChangeSet(extras, requestId, operationId);
+        placeCharacterInternal(game, actorUserId, characterId, chatId, extras);
+        return oldValue;
     }
 
     /**

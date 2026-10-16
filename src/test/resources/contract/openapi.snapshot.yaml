@@ -1991,6 +1991,158 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/requests:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Очередь заявок
+      description: |
+        Мастеру — вся очередь, участнику — только свои заявки (`REQUIREMENTS §17`).
+        Фильтр `status` необязателен.
+      operationId: listRequests
+      tags: [request]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING, RUNNING, SUCCEEDED, FAILED, APPROVED, REJECTED, PARTIALLY_APPROVED, EXPIRED]
+      responses:
+        '200':
+          description: Заявки глазами запросившего
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Request' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      summary: Подача заявки
+      description: |
+        Одно горло для трёх источников (`D-040`): `origin` различает игрока, мастера и
+        предложение модели, а машина применения общая. Заявка мир не меняет — изменение
+        начинается с решения мастера. Невалидный change set сохраняется статусом `FAILED`
+        с причиной, а не отвергается целиком (`D-043`). Повтор с тем же `idempotencyKey`
+        возвращает прежнюю заявку (`PLAN` E14, задача 6).
+      operationId: submitRequest
+      tags: [request]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitRequestRequest' }
+      responses:
+        '200':
+          description: Заявка принята
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Request' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/requests/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Одна заявка с операциями
+      description: |
+        Мастеру видна любая заявка игры, участнику — только своя. Операции отдаются
+        вместе с заявкой, потому что без них нечего одобрять (`D-041`).
+      operationId: getRequest
+      tags: [request]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Заявка с операциями
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Request' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/requests/{requestId}/decision:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Решение мастера по заявке
+      description: |
+        `approve` — номера операций к применению; остальные отклоняются. Пустой список
+        означает отказ от всех операций. Каждая операция применяется своей транзакцией
+        (`D-137`), итог — `APPROVED`, `PARTIALLY_APPROVED`, `REJECTED` или `FAILED`
+        по факту применения, а не по замыслу (`D-135`).
+      operationId: decideRequest
+      tags: [request]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionRequest' }
+      responses:
+        '200':
+          description: Решение принято
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Request' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/requests/{requestId}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+      - name: requestId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Откат применённых операций заявки
+      description: |
+        Обратимые операции возвращают прежнее значение, взятое из журнала (`D-138`).
+        Необратимые (`create_item`, `post_master_message`, `create_note`) откатить нельзя:
+        удаление запрещено (`D-010`), отзыв сообщений запрещён (`D-008`). Откат идёт в
+        обратном порядке применения. Пустое тело означает «все примененные».
+      operationId: rollbackRequest
+      tags: [request]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionRequest' }
+      responses:
+        '200':
+          description: Откат выполнен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Request' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/memberships/unban:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -3141,6 +3293,96 @@ components:
         joinedAt: { type: [string, 'null'], format: date-time }
         leftAt: { type: [string, 'null'], format: date-time }
         reservedCharacterId: { type: [string, 'null'], format: uuid }
+        roleplayWishes:
+          type: [string, 'null']
+          description: |
+            «Пожелания по отыгрышу» — свободный текст игрока, который мастер читает при
+            распределении ролей (`REQUIREMENTS §17`, `D-139`). Не канон: поле живёт на
+            участии, а не на карточке, и видно только его автору и мастеру.
+    SubmitRequestRequest:
+      type: object
+      description: |
+        Подача заявки (`REQUIREMENTS §17`). `origin` и `type` — строки, а не перечисления:
+        неизвестное значение обязано дать адресный машинный код (`D-043`), а не общий отказ
+        связывания.
+      required: [type]
+      properties:
+        origin:
+          type: string
+          enum: [MASTER, PLAYER, LLM]
+          default: PLAYER
+        type:
+          type: string
+          enum: [CHARACTER_EDIT, ROLE_REQUEST, SLOT_QUESTION, CO_MASTER, AUTOPILOT]
+        toCharacterId: { type: [string, 'null'], format: uuid }
+        payload:
+          type: object
+          description: |
+            Change set: список `operations`, каждая с полями `op` и `payload`
+            (`contract/changeset.schema.json`). Виды операций — `update_character_field`,
+            `create_item`, `move_character`, `post_master_message`,
+            `update_storage_contents`, `create_note`.
+          additionalProperties: true
+        idempotencyKey: { type: [string, 'null'], maxLength: 128 }
+        expiresAt: { type: [string, 'null'], format: date-time }
+    DecisionRequest:
+      type: object
+      description: |
+        Решение по заявке: номера операций, к которым оно относится. Отсутствие тела и
+        пустой список — разные вещи: `null` значит «не прислали», пустой список — «ничего»
+        (`D-135`).
+      properties:
+        approve:
+          type: [array, 'null']
+          items: { type: integer, minimum: 1 }
+    Request:
+      type: object
+      description: |
+        Заявка (`REQUIREMENTS §17`, `D-040`). Одна сущность для игрока, мастера и модели;
+        различает источники `origin`. Статус заявки — сводка по операциям, а не намерение
+        мастера (`D-135`).
+      required: [id, gameId, origin, type, status, operations]
+      properties:
+        id: { type: string, format: uuid }
+        gameId: { type: string, format: uuid }
+        origin: { type: string, enum: [MASTER, PLAYER, LLM] }
+        type:
+          type: string
+          enum: [CHARACTER_EDIT, ROLE_REQUEST, SLOT_QUESTION, CO_MASTER, AUTOPILOT]
+        fromMembershipId: { type: [string, 'null'], format: uuid }
+        toCharacterId: { type: [string, 'null'], format: uuid }
+        status:
+          type: string
+          enum: [PENDING, RUNNING, SUCCEEDED, FAILED, APPROVED, REJECTED, PARTIALLY_APPROVED, EXPIRED]
+        error: { type: [string, 'null'] }
+        idempotencyKey: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        payload: { type: object, additionalProperties: true }
+        operations:
+          type: array
+          items: { $ref: '#/components/schemas/RequestOperation' }
+    RequestOperation:
+      type: object
+      description: |
+        Операция заявки (`D-041`). `ordinal` задаёт порядок применения: операции зависят
+        друг от друга, поэтому применяются по возрастанию, а откатываются в обратном
+        порядке (`D-137`). `oldValue` — прежнее значение, снятое при применении; откат
+        берёт его из журнала (`D-138`).
+      required: [id, ordinal, op, status]
+      properties:
+        id: { type: string, format: uuid }
+        ordinal: { type: integer, minimum: 1 }
+        op:
+          type: string
+          enum: [update_character_field, create_item, move_character, post_master_message, update_storage_contents, create_note]
+        status:
+          type: string
+          enum: [PENDING, APPLIED, REJECTED, FAILED, ROLLED_BACK]
+        reason: { type: [string, 'null'] }
+        payload: { type: object, additionalProperties: true }
+        oldValue: { type: [object, 'null'], additionalProperties: true }
+
     InvitationRequest:
       type: object
       description: |
