@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 
 /**
@@ -20,8 +21,14 @@ public class MailConfiguration {
 
     private static final String TIMEOUT_MS = "10000";
 
+    /**
+     * Бин называется `javaMailSender` и имеет тип {@link JavaMailSender}, чтобы
+     * `MailSenderAutoConfiguration` отступил: его условие — «нет бина JavaMailSender».
+     * Бин с другим типом не отменял автоконфигурацию, и она пыталась зарегистрировать
+     * свой `mailSender` — контекст прода падал на конфликте имён.
+     */
     @Bean
-    MailSender mailSender(
+    JavaMailSender javaMailSender(
             @Value("${spring.mail.host:}") String host,
             @Value("${spring.mail.port:587}") int port,
             @Value("${spring.mail.username:}") String username,
@@ -58,6 +65,12 @@ public class MailConfiguration {
         javaMailSender.getJavaMailProperties().setProperty("mail.smtp.connectiontimeout", TIMEOUT_MS);
         javaMailSender.getJavaMailProperties().setProperty("mail.smtp.timeout", TIMEOUT_MS);
         javaMailSender.getJavaMailProperties().setProperty("mail.smtp.writetimeout", TIMEOUT_MS);
+        return javaMailSender;
+    }
+
+    @Bean
+    MailSender mailSender(JavaMailSender javaMailSender,
+            @Value("${chattergame.mail.from:}") String from) {
         return new SmtpMailSender(javaMailSender, from);
     }
 }

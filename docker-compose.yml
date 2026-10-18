@@ -1,11 +1,13 @@
 # Локальный Postgres для разработки и прогона гейта.
 #
 # Образ зафиксирован на версии 16 — это подтверждённая версия стека (D-092).
-# Один сервис с двумя профилями: состав одинаков, различаются имя тома и порт,
-# чтобы данные dev и prod не пересекались.
+# Профиль только включает сервис: состав у dev и prod одинаков. Окружения разделяются
+# именем проекта compose, потому что от него зависят имена тома и сети, и своим `.env`:
 #
-#   docker compose --profile dev up -d
-#   docker compose --profile prod up -d
+#   docker compose -p chattergame-dev  --profile dev  up -d
+#   docker compose -p chattergame-prod --profile prod up -d
+#
+# Порт и имя базы задаются в `.env` (`CHATTERGAME_DB_PORT`, `CHATTERGAME_DB_NAME`).
 services:
   postgres:
     image: postgres:16

@@ -14,9 +14,18 @@ chattergame:
     # и относительный путь там бесполезен (D-142).
     link-base: ${CHATTERGAME_PUBLIC_URL:}
     starttls: ${CHATTERGAME_SMTP_STARTTLS:true}
+  realtime:
+    # Прод-домен обязателен: пустое значение означает «сокет не разрешён ниоткуда»,
+    # а не «разрешено всем» (`D-073`). Забытая настройка закрывает доступ, а не открывает.
+    allowed-origins: ${CHATTERGAME_REALTIME_ALLOWED_ORIGINS:}
   session:
     # Прод живёт за TLS, поэтому cookie сессии уходит только по https.
     cookie-secure: true
+
+server:
+  # Приложение стоит за nginx: без этого `getRemoteAddr()` вернул бы адрес прокси,
+  # и лимиты сброса пароля считались бы на один IP.
+  forward-headers-strategy: framework
 
 logging:
   level:

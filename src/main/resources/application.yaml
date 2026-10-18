@@ -7,6 +7,13 @@ spring:
     url: ${CHATTERGAME_DB_URL:jdbc:postgresql://localhost:5432/chattergame}
     username: ${CHATTERGAME_DB_USER:chattergame}
     password: ${CHATTERGAME_DB_PASSWORD:chattergame}
+  servlet:
+    multipart:
+      # Потолок приёма файла должен быть не ниже `chattergame.media.max-file-bytes`: иначе
+      # Spring отклонит запрос раньше проверки формата, и документированные 5 МиБ станут
+      # недостижимы. Обе границы читают одно свойство, поэтому настройка одна.
+      max-file-size: ${chattergame.media.max-file-bytes:5242880}
+      max-request-size: ${CHATTERGAME_MEDIA_MAX_REQUEST_BYTES:6291456}
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
@@ -21,10 +28,9 @@ chattergame:
   realtime:
     # Origin проверяется по списку (`D-073`): чужая страница в браузере пользователя иначе
     # откроет сокет к серверу с его cookie. Прод-домен перечисляется здесь, в dev —
-    # адрес Vite-сервера.
-    allowed-origins:
-      - http://localhost:5173
-      - http://localhost:8080
+    # адрес Vite-сервера. Список задаётся одной переменной через запятую: значение из
+    # окружения заменяет умолчание целиком, а не дополняет его.
+    allowed-origins: ${CHATTERGAME_REALTIME_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:8080}
     # Сердцебиение: мёртвые сокеты высвобождаются по таймауту приложения, а не TCP (`D-083`).
     heartbeat-interval: 20s
     idle-timeout: 60s

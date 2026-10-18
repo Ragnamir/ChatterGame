@@ -77,7 +77,7 @@ Frontend: React 18 + TypeScript + Vite + `vite-plugin-pwa` (`D-090`).
 ./gradlew build              # компиляция и все тесты
 ./scripts/gate.sh E08        # проверки конкретного этапа
 ./scripts/check-docs.sh      # согласованность документации: ссылки D-xxx, карта этапов
-docker compose up -d db      # локальный Postgres
+docker compose -p chattergame-dev --profile dev up -d  # локальный Postgres 16
 ./gradlew bootRun            # профиль dev по умолчанию
 ```
 
@@ -93,6 +93,17 @@ Testcontainers. Тесты молча скипаются, если базы не
 ./gradlew -q resetDb -Pdb.url=jdbc:postgresql://localhost:5432/chattergame \
   -Pdb.user=chattergame -Pdb.password=chattergame
 ```
+
+## Эксплуатация
+
+| Документ | Назначение |
+|---|---|
+| `docs/OPS/deploy.md` | dev-контур и хостинг: параметры, окружение, systemd, nginx, проверки |
+| `docs/OPS/email.md` | SMTP, SPF/DKIM/DMARC, приёмка доставки |
+| `docs/OPS/backup.md` | бэкап, хранение, проверка восстановления |
+
+Секреты (пароль БД, SMTP, `CHATTERGAME_OPS_TOKEN`, `CHATTERGAME_LLM_SECRET_KEY`) живут
+только в окружении и в репозиторий не попадают (`D-079`, `D-093`, `D-144`).
 
 ## Конвенции кода
 

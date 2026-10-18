@@ -10,6 +10,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.net.URI;
 
@@ -47,6 +48,19 @@ public class ApiExceptionHandler {
     public ResponseEntity<ProblemDetail> handleUnreadable(HttpMessageNotReadableException exception) {
         return ResponseEntity.badRequest()
                 .body(problem(HttpStatus.BAD_REQUEST, "malformed_body", "Тело запроса не разобрано"));
+    }
+
+    /**
+     * Файл больше потолка приёма. Без этого обработчика ограничение multipart отдавало бы
+     * `500`: клиент не отличил бы «файл велик» от поломки сервера.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ProblemDetail> handleTooLarge(MaxUploadSizeExceededException exception) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(problem(
+                        HttpStatus.PAYLOAD_TOO_LARGE,
+                        "payload_too_large",
+                        "Файл больше допустимого размера"));
     }
 
     /** Нет вида «упало — и вернулось сообщение драйвера»: наружу уходит только 500 и код. */
