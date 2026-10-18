@@ -143,9 +143,13 @@ export function Composer({
       </div>
 
       <div className="form__actions">
-        <button className="button button--primary" type="submit" disabled={blocked || body.trim().length === 0}>
-          {busy ? translate('composer.sending') : translate('composer.send')}
-        </button>
+          <button
+            className="button button--primary"
+            type="submit"
+            disabled={blocked || kindBlocked !== null || body.trim().length === 0}
+          >
+            {busy ? translate('composer.sending') : translate('composer.send')}
+          </button>
         <span className="composer__hint">{translate('composer.hint')}</span>
       </div>
     </form>

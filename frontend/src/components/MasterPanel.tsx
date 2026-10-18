@@ -6,16 +6,10 @@ import type {
   Restriction,
   RestrictionKind,
 } from '../api/types';
-import { translate, type MessageKey } from '../i18n/ru';
+import { translate } from '../i18n/ru';
+import { formatRestrictionExpiry, RESTRICTION_LABEL } from '../lib/turn';
 
 const KINDS: readonly RestrictionKind[] = ['NO_SPEECH', 'NO_ACTION', 'NO_MOVE', 'NO_JOKE'];
-
-const KIND_LABEL: Record<RestrictionKind, MessageKey> = {
-  NO_SPEECH: 'restriction.kind.NO_SPEECH',
-  NO_ACTION: 'restriction.kind.NO_ACTION',
-  NO_MOVE: 'restriction.kind.NO_MOVE',
-  NO_JOKE: 'restriction.kind.NO_JOKE',
-};
 
 export interface MasterPanelProps {
   characters: readonly Character[];
@@ -29,6 +23,7 @@ export interface MasterPanelProps {
     subjectId: string;
     kind: RestrictionKind;
     reason: string;
+    expiresAt: string | null;
   }) => Promise<void>;
   onRevoke: (restrictionId: string) => Promise<void>;
 }
@@ -53,6 +48,7 @@ export function MasterPanel({
   const [reason, setReason] = useState('');
   const [kind, setKind] = useState<RestrictionKind>('NO_SPEECH');
   const [subjectId, setSubjectId] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -98,6 +94,7 @@ export function MasterPanel({
         subjectId,
         kind,
         reason: reason.trim(),
+        expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       }),
     );
   }
@@ -178,7 +175,7 @@ export function MasterPanel({
           >
             {KINDS.map((value) => (
               <option key={value} value={value}>
-                {translate(KIND_LABEL[value])}
+                {translate(RESTRICTION_LABEL[value])}
               </option>
             ))}
           </select>
@@ -207,6 +204,15 @@ export function MasterPanel({
             onChange={(event) => setReason(event.target.value)}
           />
         </div>
+        <div className="field">
+          <label htmlFor="master-restriction-until">{translate('master.restrictionUntil')}</label>
+          <input
+            id="master-restriction-until"
+            type="datetime-local"
+            value={expiresAt}
+            onChange={(event) => setExpiresAt(event.target.value)}
+          />
+        </div>
         <div className="form__actions">
           <button className="button button--primary" type="submit" disabled={busy || !subjectId || reason.trim().length === 0}>
             {translate('master.restrict')}
@@ -222,8 +228,9 @@ export function MasterPanel({
           <ul className="restrictions">
             {restrictions.map((restriction) => (
               <li key={restriction.id} className="restrictions__row">
-                <span>{translate(KIND_LABEL[restriction.kind])}</span>
+                <span>{translate(RESTRICTION_LABEL[restriction.kind])}</span>
                 <span className="restrictions__reason">{restriction.reason}</span>
+                <span className="badge">{formatRestrictionExpiry(restriction.expiresAt)}</span>
                 {restriction.revokedAt ? (
                   <span className="badge">{translate('master.revoked')}</span>
                 ) : (

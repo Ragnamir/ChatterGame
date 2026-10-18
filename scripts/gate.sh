@@ -825,6 +825,60 @@ case "$stage" in
       echo "FAIL: F02 — прод-сборка не собрана"
     fi
     ;;
+  F03)
+    # `PLAN F03`: ход и ограничения в интерфейсе. Проверки привязаны к тому, что нельзя
+    # подменить «похожим» экраном: причина отказа до отправки, бюджет по персонажу и
+    # срок ограничения, а не только его текст.
+    if [ ! -d frontend/node_modules ]; then
+      fail=1
+      echo "FAIL: F03 — зависимости фронта не установлены (cd frontend && npm ci)"
+    else
+      echo "  ok: F03 — зависимости фронта на месте"
+    fi
+    if [ -f frontend/src/lib/turn.ts ] \
+      && grep -q 'blockedKindReasons' frontend/src/lib/turn.ts \
+      && grep -q 'blockedKindReasons' frontend/src/pages/GameRoomPage.tsx; then
+      echo "  ok: F03 — причины блокировки видов сообщений вынесены в проверяемый модуль"
+    else
+      fail=1
+      echo "FAIL: F03 требует blockedKindReasons в frontend/src/lib/turn.ts"
+    fi
+    if grep -q 'turn.speechSpent' frontend/src/components/TurnPanel.tsx \
+      && grep -q 'turn.actionSpent' frontend/src/components/TurnPanel.tsx \
+      && grep -q 'turn.closed' frontend/src/components/TurnPanel.tsx; then
+      echo "  ok: F03 — бюджет персонажа и «ход не открыт» видны до отправки"
+    else
+      fail=1
+      echo "FAIL: F03 требует индикатор бюджета и состояния хода в TurnPanel"
+    fi
+    if grep -q 'formatRestrictionExpiry' frontend/src/components/RestrictionNotice.tsx \
+      && grep -q 'formatRestrictionExpiry' frontend/src/components/MasterPanel.tsx \
+      && grep -q 'expiresAt' frontend/src/components/MasterPanel.tsx; then
+      echo "  ok: F03 — ограничение показано с причиной и сроком (D-064)"
+    else
+      fail=1
+      echo "FAIL: F03 требует показа ограничения с причиной и сроком"
+    fi
+    if [ -f frontend/tests/F03Turn.test.ts ] \
+      && (cd frontend && node --test tests/F03Turn.test.ts); then
+      echo "  ok: F03 — тесты хода и ограничений пройдены"
+    else
+      fail=1
+      echo "FAIL: F03 — тесты хода и ограничений провалены"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: F03 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: F03 — нарушены словарь или доступность"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: F03 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: F03 — прод-сборка не собрана"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

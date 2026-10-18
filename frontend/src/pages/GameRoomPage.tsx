@@ -19,6 +19,7 @@ import type {
 import { Composer } from '../components/Composer';
 import { MasterPanel } from '../components/MasterPanel';
 import { Notice, describeError } from '../components/Notice';
+import { RestrictionNotice } from '../components/RestrictionNotice';
 import { GameHeader, TurnPanel } from '../components/TurnPanel';
 import { TransitionMap } from '../components/TransitionMap';
 import { VirtualFeed } from '../components/VirtualFeed';
@@ -35,6 +36,7 @@ import {
   unreadMap,
   visibleTransitions,
 } from '../lib/room';
+import { blockedKindReasons } from '../lib/turn';
 import { useSession } from '../session/SessionProvider';
 
 const CHAT_KIND_LABEL: Record<ChatKind, MessageKey> = {
@@ -383,6 +385,7 @@ export function GameRoomPage() {
     subjectId: string;
     kind: RestrictionKind;
     reason: string;
+    expiresAt: string | null;
   }): Promise<void> {
     await roomApi.setRestriction(gameId, input);
     await refresh();
@@ -433,7 +436,13 @@ export function GameRoomPage() {
       : data.game.paused
         ? translate('room.paused', { reason: data.game.pauseReason ?? translate('map.noReason') })
         : (disabledChat ?? null);
-  const blockedKinds = blockedKindReasons(data, feedKind, speakerId, membership, isMaster);
+  const blockedKinds = blockedKindReasons(
+    { phase: data.game.phase, turn: data.turn, restrictions: data.restrictions },
+    feedKind,
+    speakerId,
+    membership?.id ?? null,
+    isMaster,
+  );
   const composerKinds: readonly MessageKind[] = isObserver
     ? ['JOKE']
     : isMaster
@@ -608,6 +617,14 @@ export function GameRoomPage() {
         onClose={closeTurn}
       />
 
+      {!isMaster ? (
+        <RestrictionNotice
+          restrictions={data.restrictions}
+          speakerId={speakerId}
+          membershipId={membership?.id ?? null}
+        />
+      ) : null}
+
       {isMaster ? (
         <MasterPanel
           characters={data.characters}
@@ -622,62 +639,4 @@ export function GameRoomPage() {
       ) : null}
     </>
   );
-}
-
-/**
- * Почему тип сообщения закрыт (`PLAN F03`). Причина показывается до попытки отправки:
- * закрытый ход не мешает шутке, а исчерпанный бюджет — второму типу. Радио принимает
- * только речь (`D-039`), поэтому `ACTION` и `JOKE` там закрыты всегда.
- */
-function blockedKindReasons(
-  data: RoomData,
-  kind: ChatKind,
-  speakerId: string | null,
-  membership: Membership | null,
-  isMaster: boolean,
-): Map<MessageKind, string> {
-  const blocked = new Map<MessageKind, string>();
-  if (data.game.phase === 'FINISHED') {
-    blocked.set('SPEECH', translate('room.finalJokeOnly'));
-    blocked.set('ACTION', translate('room.finalJokeOnly'));
-  }
-  if (data.turn.turnBased && !data.turn.open) {
-    blocked.set('SPEECH', translate('room.turnClosed'));
-    blocked.set('ACTION', translate('room.turnClosed'));
-  }
-  if (kind === 'RADIO') {
-    blocked.set('ACTION', translate('composer.radioSpeechOnly'));
-    blocked.set('JOKE', translate('composer.radioSpeechOnly'));
-  }
-  if (kind === 'FINAL' && !isMaster) {
-    blocked.set('MASTER', translate('composer.masterOnly'));
-  }
-  if (speakerId) {
-    const budget = data.turn.budgets.find((entry) => entry.characterId === speakerId);
-    if (budget?.speechUsed) {
-      blocked.set('SPEECH', translate('room.budgetSpeech'));
-    }
-    if (budget?.actionUsed) {
-      blocked.set('ACTION', translate('room.budgetAction'));
-    }
-  }
-  for (const restriction of data.restrictions) {
-    if (restriction.revokedAt !== null) {
-      continue;
-    }
-    if (restriction.expiresAt !== null && Date.parse(restriction.expiresAt) <= Date.now()) {
-      continue;
-    }
-    const reason = translate('room.restricted', { reason: restriction.reason });
-    if (restriction.kind === 'NO_SPEECH' && restriction.subjectId === speakerId) {
-      blocked.set('SPEECH', reason);
-    }
-    if (restriction.kind === 'NO_ACTION' && restriction.subjectId === speakerId) {
-      blocked.set('ACTION', reason);
-    }
-    if (restriction.kind === 'NO_JOKE' && restriction.subjectId === membership?.id) {
-      blocked.set('JOKE', reason);
-    }
-  }
-  return blocked;
 }
