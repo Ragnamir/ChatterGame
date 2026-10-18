@@ -714,6 +714,117 @@ case "$stage" in
       echo "  ok: E14 — контроллер заявок не пишет в доменные таблицы"
     fi
     ;;
+  F01)
+    # `PLAN F01`: установка, вход после перезапуска, список игр, кабинет. Проверки идут по
+    # собранному фронту: настройка `VitePWA` может быть верной, а артефакт — без манифеста.
+    if [ ! -f frontend/package.json ]; then
+      fail=1
+      echo "FAIL: F01 — нет frontend/package.json"
+    elif [ ! -d frontend/node_modules ]; then
+      fail=1
+      echo "FAIL: F01 — зависимости фронта не установлены (cd frontend && npm ci)"
+    else
+      echo "  ok: F01 — каркас фронта на месте"
+    fi
+    if grep -q '"vite-plugin-pwa"' frontend/package.json \
+      && grep -q 'VitePWA' frontend/vite.config.ts; then
+      echo "  ok: F01 — PWA-плагин подключён (D-090)"
+    else
+      fail=1
+      echo "FAIL: F01 требует vite-plugin-pwa в сборке (D-090)"
+    fi
+    # Контур доступа: guard на маршруте и cookie-сессия, а не токен в localStorage.
+    if grep -rq 'RequireAuth' frontend/src && grep -rq "credentials: 'include'" frontend/src/api; then
+      echo "  ok: F01 — маршруты под guard, сессия идёт cookie (D-079)"
+    else
+      fail=1
+      echo "FAIL: F01 требует guard маршрутов и cookie-сессии"
+    fi
+    # `D-081`: строки только через словарь. Проверка — часть гейта, не только npm-скрипт.
+    if (cd frontend && npm run --silent check:i18n); then
+      echo "  ok: F01 — кириллица только в словаре (D-081)"
+    else
+      fail=1
+      echo "FAIL: F01 — кириллические литералы вне словаря (D-081)"
+    fi
+    if (cd frontend && npm run --silent check:a11y); then
+      echo "  ok: F01 — разметка доступна с клавиатуры"
+    else
+      fail=1
+      echo "FAIL: F01 — разметка нарушает доступность"
+    fi
+    if (cd frontend && npm test --silent); then
+      echo "  ok: F01 — тесты фронта пройдены"
+    else
+      fail=1
+      echo "FAIL: F01 — тесты фронта провалены"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: F01 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: F01 — прод-сборка не собрана"
+    fi
+    if (cd frontend && npm run --silent check:pwa); then
+      echo "  ok: F01 — установка PWA подтверждена артефактом"
+    else
+      fail=1
+      echo "FAIL: F01 — артефакт не устанавливается как PWA"
+    fi
+    ;;
+  F02)
+    # `PLAN F02`: игровая комната. Проверки привязаны к механизмам, которые нельзя
+    # подменить «похожим» экраном: окно виртуализации, бейджи, выбор персонажа,
+    # три состояния перехода, офлайн-кэш и метрика переподключения.
+    if [ ! -d frontend/node_modules ]; then
+      fail=1
+      echo "FAIL: F02 — зависимости фронта не установлены (cd frontend && npm ci)"
+    else
+      echo "  ok: F02 — зависимости фронта на месте"
+    fi
+    if [ -f frontend/tests/F02Room.test.ts ] \
+      && grep -q 'renderWindow' frontend/src/components/VirtualFeed.tsx \
+      && grep -q 'renderWindow' frontend/src/lib/virtual.ts; then
+      echo "  ok: F02 — виртуализация ленты через окно рендера (D-082)"
+    else
+      fail=1
+      echo "FAIL: F02 требует виртуализации ленты: renderWindow в VirtualFeed (D-082)"
+    fi
+    if grep -q 'unread' frontend/src/lib/room.ts \
+      && grep -q 'onKeyDown' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'aria-current' frontend/src/pages/GameRoomPage.tsx; then
+      echo "  ok: F02 — бейджи непрочитанного и клавиатурная навигация (D-085)"
+    else
+      fail=1
+      echo "FAIL: F02 требует бейджей непрочитанного и клавиатурной навигации (D-085)"
+    fi
+    if grep -q 'loadFeed' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'saveFeed' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'ReconnectClock' frontend/src/pages/GameRoomPage.tsx; then
+      echo "  ok: F02 — офлайн-кэш ленты и метрика переподключения"
+    else
+      fail=1
+      echo "FAIL: F02 требует офлайн-чтения кэша и метрики времени до первого сообщения"
+    fi
+    if (cd frontend && node --test tests/F02Room.test.ts); then
+      echo "  ok: F02 — тесты комнаты пройдены"
+    else
+      fail=1
+      echo "FAIL: F02 — тесты комнаты провалены"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: F02 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: F02 — нарушены словарь или доступность"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: F02 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: F02 — прод-сборка не собрана"
+    fi
+    ;;
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;
