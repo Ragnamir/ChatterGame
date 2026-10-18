@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FeedItem } from '../api/types';
+import type { FeedItem, Note } from '../api/types';
 import { translate, hasMessageKey, type MessageKey } from '../i18n/ru';
+import { isNoted, notesForMessage } from '../lib/notebook';
 import { isNearBottom, renderWindow } from '../lib/virtual';
 
 const ITEM_HEIGHT = 84;
@@ -26,10 +27,13 @@ export interface VirtualFeedProps {
   items: readonly FeedItem[];
   names: ReadonlyMap<string, string>;
   noteTitles: ReadonlyMap<string, string>;
+  noteById: ReadonlyMap<string, Note>;
   highlightNoteIds: ReadonlySet<string>;
   loadingOlder: boolean;
   canLoadMore: boolean;
   onLoadMore: () => void;
+  savedMessageIds?: ReadonlySet<string>;
+  onSave?: (item: FeedItem) => void;
 }
 
 /**
@@ -41,10 +45,13 @@ export function VirtualFeed({
   items,
   names,
   noteTitles,
+  noteById,
   highlightNoteIds,
   loadingOlder,
   canLoadMore,
   onLoadMore,
+  savedMessageIds,
+  onSave,
 }: VirtualFeedProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -103,13 +110,13 @@ export function VirtualFeed({
     >
       <div className="feed__spacer" style={{ height: windowed.totalHeight }} aria-hidden="true" />
       <ol className="feed__list" style={{ transform: `translateY(${windowed.offsetTop}px)` }}>
-        {visible.map((item) => (
+        {visible.map((item) => {
+          const matchedNotes = notesForMessage(noteById, item.matchedNoteIds);
+          return (
           <li
             key={item.seq}
             className={`message message--${item.kind.toLowerCase()}${
-              highlightNoteIds.size > 0 && item.matchedNoteIds.some((id) => highlightNoteIds.has(id))
-                ? ' message--noted'
-                : ''
+              highlightNoteIds.size > 0 && isNoted(item, highlightNoteIds) ? ' message--noted' : ''
             }`}
             style={{ minHeight: ITEM_HEIGHT }}
             data-seq={item.seq}
@@ -127,17 +134,30 @@ export function VirtualFeed({
               <time className="message__time" dateTime={item.createdAt}>
                 {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </time>
+              {onSave && item.messageId ? (
+                <button
+                  type="button"
+                  className="message__save"
+                  disabled={savedMessageIds?.has(item.messageId) ?? false}
+                  onClick={() => onSave(item)}
+                >
+                  {savedMessageIds?.has(item.messageId)
+                    ? translate('feed.saved')
+                    : translate('feed.save')}
+                </button>
+              ) : null}
             </div>
             <p className="message__body">{bodyOf(item)}</p>
-            {item.matchedNoteIds.length > 0 ? (
+            {matchedNotes.length > 0 ? (
               <p className="message__notes">
-                {item.matchedNoteIds
-                  .map((id) => noteTitles.get(id) ?? translate('feed.note'))
+                {matchedNotes
+                  .map((note) => noteTitles.get(note.id) ?? translate('feed.note'))
                   .join(', ')}
               </p>
             ) : null}
           </li>
-        ))}
+          );
+        })}
       </ol>
       {loadingOlder ? (
         <p className="feed__loading" role="status">

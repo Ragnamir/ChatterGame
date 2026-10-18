@@ -218,3 +218,37 @@ export interface Placement {
   chatId: string;
   hidden: boolean;
 }
+
+export type NotebookTab = 'notes' | 'saved';
+
+export interface NoteKeyword {
+  id?: string;
+  raw: string;
+  exactMatch: boolean;
+}
+
+export interface Note {
+  id: string;
+  gameId: string;
+  authorMembershipId: string;
+  targetKind: 'CHARACTER' | 'MEMBERSHIP';
+  targetId: string;
+  targetLabel: string;
+  body: string;
+  matchingPending: boolean;
+  createdAt: string;
+  updatedAt: string;
+  keywords: NoteKeyword[];
+}
+
+export interface SavedMessage {
+  id: string;
+  gameId: string;
+  ownerMembershipId: string;
+  messageId: string;
+  textSnapshot: string;
+  speakerSnapshot: string | null;
+  comment: string | null;
+  noteId: string | null;
+  createdAt: string;
+}

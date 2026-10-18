@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { GameSocket } from '../api/socket';
-import { gamesApi, roomApi } from '../api/endpoints';
+import { gamesApi, notebookApi, roomApi } from '../api/endpoints';
 import type {
   Channel,
   Character,
@@ -11,12 +11,16 @@ import type {
   GameGraph,
   Membership,
   MessageKind,
+  Note,
   Restriction,
   RestrictionKind,
+  SavedMessage,
   Turn,
   Unread,
 } from '../api/types';
+import { ChannelActions } from '../components/ChannelActions';
 import { Composer } from '../components/Composer';
+import { Notebook, type NoteTarget } from '../components/Notebook';
 import { MasterPanel } from '../components/MasterPanel';
 import { Notice, describeError } from '../components/Notice';
 import { RestrictionNotice } from '../components/RestrictionNotice';
@@ -36,6 +40,12 @@ import {
   unreadMap,
   visibleTransitions,
 } from '../lib/room';
+import {
+  canWriteNotes,
+  noteTitles as buildNoteTitles,
+  notebookScope,
+  notebookTabs,
+} from '../lib/notebook';
 import { blockedKindReasons } from '../lib/turn';
 import { useSession } from '../session/SessionProvider';
 
@@ -56,6 +66,8 @@ type RoomData = {
   unread: Unread;
   turn: Turn;
   restrictions: Restriction[];
+  notes: Note[];
+  saved: SavedMessage[];
 };
 
 const EMPTY_GRAPH: GameGraph = { nodes: [], edges: [] };
@@ -111,14 +123,17 @@ export function GameRoomPage() {
       return;
     }
     try {
-      const [game, channels, characters, memberships, turn, restrictions] = await Promise.all([
-        gamesApi.read(gameId),
-        roomApi.channels(gameId),
-        roomApi.characters(gameId),
-        roomApi.memberships(gameId),
-        roomApi.turn(gameId),
-        roomApi.restrictions(gameId),
-      ]);
+      const [game, channels, characters, memberships, turn, restrictions, notes, saved] =
+        await Promise.all([
+          gamesApi.read(gameId),
+          roomApi.channels(gameId),
+          roomApi.characters(gameId),
+          roomApi.memberships(gameId),
+          roomApi.turn(gameId),
+          roomApi.restrictions(gameId),
+          notebookApi.notes(gameId),
+          notebookApi.saved(gameId),
+        ]);
       setData({
         game,
         graph: EMPTY_GRAPH,
@@ -128,6 +143,8 @@ export function GameRoomPage() {
         unread: EMPTY_UNREAD,
         turn,
         restrictions,
+        notes,
+        saved,
       });
       setFailure(null);
     } catch (error) {
@@ -221,6 +238,40 @@ export function GameRoomPage() {
     () => new Map((data?.characters ?? []).map((character) => [character.id, character.name])),
     [data],
   );
+
+  // Тетрадь читается по игре и участию, а не по говорящему: смена персонажа не должна
+  // перезагружать заметки и терять открытую вкладку (`PLAN F04`).
+  const noteById = useMemo(
+    () => new Map((data?.notes ?? []).map((note) => [note.id, note])),
+    [data],
+  );
+  const noteTitleMap = useMemo(
+    () => buildNoteTitles(data?.notes ?? [], names),
+    [data, names],
+  );
+  const noteIds = useMemo(() => new Set(noteById.keys()), [noteById]);
+  const savedMessageIds = useMemo(
+    () => new Set((data?.saved ?? []).map((entry) => entry.messageId)),
+    [data],
+  );
+  const noteTargets = useMemo(() => {
+    const live = (data?.characters ?? []).filter(
+      (character) => !character.archived && (isMaster || character.mine),
+    );
+    const targets: NoteTarget[] = live.map((character) => ({
+      id: character.id,
+      label: character.name,
+      kind: 'CHARACTER',
+    }));
+    if (isMaster && membership) {
+      targets.push({
+        id: membership.id,
+        label: translate('notebook.selfTarget'),
+        kind: 'MEMBERSHIP' as const,
+      });
+    }
+    return targets;
+  }, [data, isMaster, membership]);
 
   useEffect(() => {
     if (!gameId || !activeChatId || !data || !canRead) {
@@ -406,6 +457,66 @@ export function GameRoomPage() {
     await refresh();
   }
 
+  async function createNote(input: {
+    targetKind: 'CHARACTER' | 'MEMBERSHIP';
+    targetId: string;
+    body: string;
+    keywords: { raw: string; exactMatch: boolean }[];
+  }): Promise<void> {
+    await notebookApi.createNote(gameId, input);
+    await refresh();
+  }
+
+  async function commentSaved(savedId: string, comment: string): Promise<void> {
+    await notebookApi.commentSaved(gameId, savedId, comment.trim().length === 0 ? null : comment);
+    await refresh();
+  }
+
+  async function saveMessage(item: FeedItem): Promise<void> {
+    if (!item.messageId) {
+      return;
+    }
+    await notebookApi.save(gameId, { messageId: item.messageId, comment: null, noteId: null });
+    await refresh();
+    setNotice(translate('notebook.savedOk'));
+  }
+
+  async function createWhisper(characterIds: string[]): Promise<void> {
+    const chat = await roomApi.createWhisper(gameId, characterIds);
+    await refresh();
+    setActiveChatId(chat.id);
+  }
+
+  async function whisperDecision(
+    chatId: string,
+    action: 'accept' | 'decline' | 'close',
+  ): Promise<void> {
+    if (action === 'accept') {
+      await roomApi.acceptWhisper(gameId, chatId);
+    } else if (action === 'decline') {
+      await roomApi.declineWhisper(gameId, chatId);
+    } else {
+      await roomApi.closeWhisper(gameId, chatId);
+    }
+    await refresh();
+  }
+
+  async function createRadio(title: string, characterIds: string[]): Promise<void> {
+    const chat = await roomApi.createRadio(gameId, title, characterIds);
+    await refresh();
+    setActiveChatId(chat.id);
+  }
+
+  async function radioMembers(chatId: string, characterIds: string[]): Promise<void> {
+    await roomApi.setChannelMembers(gameId, chatId, characterIds);
+    await refresh();
+  }
+
+  async function radioDisabled(chatId: string, disabled: boolean): Promise<void> {
+    await roomApi.setChannelDisabled(gameId, chatId, disabled);
+    await refresh();
+  }
+
   if (failure && !data) {
     return (
       <>
@@ -583,8 +694,11 @@ export function GameRoomPage() {
               <VirtualFeed
                 items={feed}
                 names={names}
-                noteTitles={new Map()}
-                highlightNoteIds={new Set()}
+                noteTitles={noteTitleMap}
+                noteById={noteById}
+                highlightNoteIds={noteIds}
+                savedMessageIds={savedMessageIds}
+                onSave={(item) => void saveMessage(item)}
                 loadingOlder={loadingMore}
                 canLoadMore={hasMore}
                 onLoadMore={() => void loadMore()}
@@ -609,6 +723,22 @@ export function GameRoomPage() {
         </section>
       </div>
 
+      <ChannelActions
+        isMaster={isMaster}
+        isObserver={isObserver}
+        activeChannel={activeChannel}
+        candidates={(activeNode?.present ?? [])
+          .map((present) => data.characters.find((character) => character.id === present.id))
+          .filter((character): character is Character => Boolean(character))}
+        characters={data.characters}
+        ownCharacterId={ownCharacterId}
+        onCreateWhisper={createWhisper}
+        onWhisperDecision={whisperDecision}
+        onCreateRadio={createRadio}
+        onRadioMembers={radioMembers}
+        onRadioDisabled={radioDisabled}
+      />
+
       <TurnPanel
         turn={data.turn}
         characterNames={names}
@@ -624,6 +754,19 @@ export function GameRoomPage() {
           membershipId={membership?.id ?? null}
         />
       ) : null}
+
+      <Notebook
+        key={notebookScope(gameId, membership?.id ?? null)}
+        tabs={notebookTabs(membership?.role ?? null)}
+        notes={data.notes}
+        saved={data.saved}
+        names={names}
+        noteById={noteById}
+        targets={noteTargets}
+        canWriteNotes={canWriteNotes(membership?.role ?? null)}
+        onCreateNote={createNote}
+        onComment={commentSaved}
+      />
 
       {isMaster ? (
         <MasterPanel

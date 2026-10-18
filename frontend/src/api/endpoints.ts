@@ -10,11 +10,13 @@ import type {
   GameGraph,
   LoginInput,
   Membership,
+  Note,
   Placement,
   PostMessageInput,
   RegisterInput,
   Restriction,
   RestrictionKind,
+  SavedMessage,
   Turn,
   Unread,
   UpdateProfileInput,
@@ -73,6 +75,41 @@ export const roomApi = {
   turn: (gameId: string): Promise<Turn> => api.get(`/games/${gameId}/turn`),
   openTurn: (gameId: string): Promise<Turn> => api.post(`/games/${gameId}/turn/open`),
   closeTurn: (gameId: string): Promise<Turn> => api.post(`/games/${gameId}/turn/close`),
+
+  createRadio: (gameId: string, title: string, characterIds: string[]): Promise<Channel> =>
+    api.post(`/games/${gameId}/radios`, { title, characterIds }),
+  setChannelMembers: (gameId: string, chatId: string, characterIds: string[]): Promise<Channel> =>
+    api.put(`/games/${gameId}/channels/${chatId}/members`, { characterIds }),
+  setChannelDisabled: (gameId: string, chatId: string, disabled: boolean): Promise<Channel> =>
+    api.put(`/games/${gameId}/channels/${chatId}/disabled`, { disabled }),
+  createWhisper: (gameId: string, characterIds: string[]): Promise<Channel> =>
+    api.post(`/games/${gameId}/whispers`, { characterIds }),
+  acceptWhisper: (gameId: string, chatId: string): Promise<Channel> =>
+    api.post(`/games/${gameId}/channels/${chatId}/accept`),
+  declineWhisper: (gameId: string, chatId: string): Promise<Channel> =>
+    api.post(`/games/${gameId}/channels/${chatId}/decline`),
+  closeWhisper: (gameId: string, chatId: string): Promise<Channel> =>
+    api.post(`/games/${gameId}/channels/${chatId}/close`),
+};
+
+export const notebookApi = {
+  notes: (gameId: string): Promise<Note[]> => api.get(`/games/${gameId}/notes`),
+  createNote: (
+    gameId: string,
+    input: {
+      targetKind: 'CHARACTER' | 'MEMBERSHIP';
+      targetId: string;
+      body: string;
+      keywords: { raw: string; exactMatch: boolean }[];
+    },
+  ): Promise<Note> => api.post(`/games/${gameId}/notes`, input),
+  saved: (gameId: string): Promise<SavedMessage[]> => api.get(`/games/${gameId}/saved-messages`),
+  save: (
+    gameId: string,
+    input: { messageId: string; comment: string | null; noteId: string | null },
+  ): Promise<SavedMessage> => api.post(`/games/${gameId}/saved-messages`, input),
+  commentSaved: (gameId: string, savedId: string, comment: string | null): Promise<SavedMessage> =>
+    api.put(`/games/${gameId}/saved-messages/${savedId}`, { comment }),
 };
 
 export type { Channel, ChannelMember };

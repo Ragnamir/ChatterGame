@@ -879,6 +879,69 @@ case "$stage" in
       echo "FAIL: F03 — прод-сборка не собрана"
     fi
     ;;
+  F04)
+    # `PLAN F04`: личные каналы и тетрадь. Проверки привязаны к решениям, которые нельзя
+    # подменить «похожим» экраном: подсветка только по `matched_note_ids` (`D-052`),
+    # вкладки тетради с разными правами (`D-063`), шёпот с приглашением (`D-038`).
+    if [ ! -d frontend/node_modules ]; then
+      fail=1
+      echo "FAIL: F04 — зависимости фронта не установлены (cd frontend && npm ci)"
+    else
+      echo "  ok: F04 — зависимости фронта на месте"
+    fi
+    if [ -f frontend/src/lib/notebook.ts ] \
+      && grep -q 'matchedNoteIds' frontend/src/lib/notebook.ts \
+      && ! grep -qE 'body\.(includes|indexOf|search|match)' frontend/src/lib/notebook.ts; then
+      echo "  ok: F04 — подсветка считается по matched_note_ids, а не поиском по тексту (D-052)"
+    else
+      fail=1
+      echo "FAIL: F04 требует подсветку только по matchedNoteIds в frontend/src/lib/notebook.ts"
+    fi
+    if grep -q 'notebookTabs' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'OBSERVER' frontend/src/lib/notebook.ts \
+      && grep -q 'canWriteNotes' frontend/src/components/Notebook.tsx; then
+      echo "  ok: F04 — вкладки тетради разведены по роли: наблюдатель без заметок (D-063)"
+    else
+      fail=1
+      echo "FAIL: F04 требует вкладки тетради и запрет заметок наблюдателю"
+    fi
+    if grep -q 'noteById' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'noteTitles' frontend/src/pages/GameRoomPage.tsx \
+      && grep -q 'notesForMessage' frontend/src/components/VirtualFeed.tsx; then
+      echo "  ok: F04 — тетрадь живёт на игре и участии, подсветка доходит до ленты"
+    else
+      fail=1
+      echo "FAIL: F04 требует тетрадь на игру/участие и подсветку в ленте"
+    fi
+    if grep -q 'channel.accept' frontend/src/components/ChannelActions.tsx \
+      && grep -q 'channel.createWhisper' frontend/src/components/ChannelActions.tsx \
+      && grep -q 'channel.createRadio' frontend/src/components/ChannelActions.tsx; then
+      echo "  ok: F04 — шёпот с приглашением и радиочаты в интерфейсе (D-038, D-039)"
+    else
+      fail=1
+      echo "FAIL: F04 требует создания шёпота с приглашением и радиочата"
+    fi
+    if [ -f frontend/tests/F04Notebook.test.ts ] \
+      && (cd frontend && node --test tests/F04Notebook.test.ts); then
+      echo "  ok: F04 — тесты тетради и подсветки пройдены"
+    else
+      fail=1
+      echo "FAIL: F04 — тесты тетради и подсветки провалены"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: F04 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: F04 — нарушены словарь или доступность"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: F04 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: F04 — прод-сборка не собрана"
+    fi
+    ;;
+
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;
