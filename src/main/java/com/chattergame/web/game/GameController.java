@@ -136,6 +136,19 @@ public class GameController {
         return Map.of("transitions", available);
     }
 
+    /**
+     * Архивирование игры (`D-010`). Единственный путь «снять игру с глаз»: удаления нет,
+     * а участники продолжают читать её в том состоянии, в котором она остановилась.
+     * Повторный вызов идемпотентен и не оставляет второго события.
+     */
+    @PostMapping("/{id}/archive")
+    public GameView archive(
+            @PathVariable UUID id, @Valid @RequestBody ArchiveGameRequest request, AuthContext context) {
+        AuthContext auth = AuthContextResolver.require(context);
+        mutations.archiveGame(auth.user().id(), id, request.reason());
+        return GameView.of(queries.requireReadable(auth.user().id(), id));
+    }
+
     /** Валидация готовности (`REQUIREMENTS §20`): свод проверок включён целиком на `E07` (`D-112`). */
     @GetMapping("/{id}/readiness")
     public ReadinessReport readiness(@PathVariable UUID id, AuthContext context) {

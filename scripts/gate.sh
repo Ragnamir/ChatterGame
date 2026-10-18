@@ -1112,6 +1112,72 @@ case "$stage" in
     fi
     ;;
 
+  O02)
+    # `PLAN O02`: экспорт, архив и эксплуатационные операции. Проверки адресные: этап
+    # принимается не по «файл существует», а по свойствам, которые нельзя подменить
+    # похожим кодом — выгрузка только мастеру, снимок со всеми чатами, архив без удаления,
+    # служебный контур за токеном.
+    if [ -f src/main/java/com/chattergame/export/GameExportService.java ] \
+      && [ -f src/main/java/com/chattergame/export/GameMarkdownRenderer.java ] \
+      && [ -f src/main/java/com/chattergame/export/GameSnapshotRestorer.java ]; then
+      echo "  ok: O02 — выгрузка и восстановление снимка на месте"
+    else
+      fail=1
+      echo "FAIL: O02 требует экспорт, Markdown-рендер и восстановление снимка (D-061, D-146)"
+    fi
+    # Экспорт только мастеру (`D-021`): участник не должен получать закрытые истории
+    # и личные диалоги, даже если у него есть право читать свой чат.
+    if grep -q 'export_master_only' src/main/java/com/chattergame/export/GameExportService.java; then
+      echo "  ok: O02 — выгрузка закрыта мастером (D-021)"
+    else
+      fail=1
+      echo "FAIL: O02 требует отказа export_master_only в выгрузке (D-021)"
+    fi
+    # Снимок включает журнал и материализацию видимости: без них «восстановилось» означало бы
+    # только текст, а resume и рассылка остались бы пустыми (`D-033`, `D-146`).
+    if grep -q '"game_event"' src/main/java/com/chattergame/export/SnapshotTables.java \
+      && grep -q '"inbox_entry"' src/main/java/com/chattergame/export/SnapshotTables.java; then
+      echo "  ok: O02 — снимок несёт журнал и inbox_entry (D-146)"
+    else
+      fail=1
+      echo "FAIL: O02 требует game_event и inbox_entry в снимке (D-146)"
+    fi
+    # Архив — единственный путь снять игру с глаз; удаления нет (`D-010`).
+    if grep -q 'archiveGame' src/main/java/com/chattergame/web/game/GameController.java \
+      && ! grep -rqE 'DELETE FROM game\b' src/main/java; then
+      echo "  ok: O02 — игра архивируется, а не удаляется (D-010)"
+    else
+      fail=1
+      echo "FAIL: O02 требует архивации без удаления игры (D-010)"
+    fi
+    # Служебный контур закрыт токеном из окружения и выключается пустым значением (`D-147`).
+    if grep -q 'X-Ops-Token' src/main/java/com/chattergame/web/ops/OpsController.java \
+      && grep -q 'MessageDigest.isEqual' src/main/java/com/chattergame/web/ops/OpsController.java \
+      && grep -q 'CHATTERGAME_OPS_TOKEN' src/main/resources/application.yaml; then
+      echo "  ok: O02 — /ops за токеном из окружения (D-147)"
+    else
+      fail=1
+      echo "FAIL: O02 требует служебного токена /ops из окружения (D-147)"
+    fi
+    # Бэкап и проверка восстановления — скрипты и документ, а не устная традиция (`D-101`, `D-145`).
+    if [ -x scripts/backup.sh ] && [ -x scripts/restore-check.sh ] \
+      && grep -q 'pg_dump' scripts/backup.sh \
+      && grep -q 'pg_restore' scripts/restore-check.sh \
+      && grep -q 'CHATTERGAME_BACKUP_RETENTION_DAYS' scripts/backup.sh \
+      && grep -q 'restore-check.sh' docs/OPS/backup.md; then
+      echo "  ok: O02 — бэкап, срок хранения и проверка восстановления (D-101, D-145)"
+    else
+      fail=1
+      echo "FAIL: O02 требует scripts/backup.sh, scripts/restore-check.sh и docs/OPS/backup.md"
+    fi
+    if find src/test/java -name 'O02*Test.java' | grep -q .; then
+      echo "  ok: O02 — тесты этапа присутствуют"
+    else
+      fail=1
+      echo "FAIL: O02 требует тестов этапа (O02*Test.java)"
+    fi
+    ;;
+
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

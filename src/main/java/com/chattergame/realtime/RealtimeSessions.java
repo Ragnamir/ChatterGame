@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -57,5 +58,17 @@ public class RealtimeSessions {
 
     public int size() {
         return sessions.size();
+    }
+
+    /**
+     * Живые сокеты по играм (`PLAN` O02). Считается по реестру, а не по БД: соединения живут
+     * в памяти узла, и «сколько людей в эфире» — вопрос к нему, а не к журналу.
+     */
+    public Map<UUID, Integer> countByGame() {
+        Map<UUID, Integer> counts = new TreeMap<>();
+        for (RealtimeSession session : sessions.values()) {
+            counts.merge(session.gameId(), 1, Integer::sum);
+        }
+        return counts;
     }
 }

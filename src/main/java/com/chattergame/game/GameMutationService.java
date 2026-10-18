@@ -845,7 +845,12 @@ public class GameMutationService {
         }
     }
 
-    /** Первый свободный играбельный персонаж: порядок по имени, чтобы выбор был воспроизводим. */
+    /**
+     * Первый свободный играбельный персонаж: порядок по времени создания, чтобы выбор был
+     * воспроизводим. Сортировать по `id` нельзя: UUIDv7 хранит миллисекунды, а внутри одной
+     * миллисекунды младшие биты случайны, и два персонажа, созданных подряд, менялись бы
+     * местами от прогона к прогону.
+     */
     private UUID freeCharacterId(UUID gameId) {
         return characters.findByGame(gameId).stream()
                 .filter(character -> !character.archived()
@@ -854,7 +859,6 @@ public class GameMutationService {
                         && character.occupantMembershipId() == null)
                 .filter(character -> memberships.findReserving(character.id()).isEmpty())
                 .map(Character::id)
-                .sorted()
                 .findFirst()
                 .orElse(null);
     }

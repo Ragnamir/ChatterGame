@@ -91,4 +91,19 @@ public class LlmCallExecutor {
     void shutdown() {
         pool.shutdownNow();
     }
+
+    /**
+     * Загрузка пула (`PLAN` O02): «глубина очереди» — это ожидающие вызова, а `active` —
+     * сколько игр ждёт ответа прямо сейчас. Без этих двух чисел переполнение очереди
+     * выглядит для оператора как внезапные `429` без причины.
+     */
+    public Load load() {
+        return new Load(
+                pool.getActiveCount(),
+                pool.getQueue().size(),
+                pool.getMaximumPoolSize() + pool.getQueue().remainingCapacity() + pool.getQueue().size());
+    }
+
+    public record Load(int active, int queued, int capacity) {
+    }
 }

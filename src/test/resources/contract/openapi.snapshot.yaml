@@ -99,6 +99,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Архивирование игры
+      description: |
+        Единственный способ снять игру с глаз: физического удаления нет (`D-010`).
+        Причина обязательна. Повторный вызов идемпотентен и второго события не пишет.
+        Архивированная игра остаётся читаемой участниками.
+      operationId: archiveGame
+      tags: [game]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArchiveRequest' }
+      responses:
+        '200':
+          description: Игра в архиве
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Game' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /games/{id}/transitions:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -281,6 +309,101 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/export.json:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Экспорт игры в JSON
+      description: |
+        Полный комплект игры для машины (`D-061`, `D-146`): все чаты, включая личные,
+        персонажи с закрытыми историями, заметки и журнал. Доступен только мастеру
+        (`D-021`): передача прав не предусмотрена, материал заменителю отдаётся вручную.
+        Файл помечен разделом `closed` — получатель видит, что в нём закрыто.
+      operationId: exportGameJson
+      tags: [export]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Снимок игры
+          headers:
+            Content-Disposition:
+              description: Имя файла `<название>-<id>.json`
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Снимок; состав таблиц фиксирован версией формата
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/export.md:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Экспорт игры в Markdown
+      description: |
+        Тот же снимок, что и `export.json`, но для человека: транскрипты по чатам, мир,
+        персонажи, предметы и заметки. Закрытые части помечены маркером «ЗАКРЫТО» и
+        перечислены в шапке (`D-061`).
+      operationId: exportGameMarkdown
+      tags: [export]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Комплект в Markdown
+          headers:
+            Content-Disposition:
+              description: Имя файла `<название>-<id>.md`
+              schema: { type: string }
+          content:
+            text/markdown:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/import:
+    post:
+      summary: Восстановление игры из снимка
+      description: |
+        Принимает файл `export.json` и восстанавливает игру в базу (`D-146`). Строки
+        пишутся как данные, а не проигрыванием мутаций: журнал входит в снимок, и повтор
+        операций дал бы другие идентификаторы и `seq`. Пользователи сопоставляются по
+        логину; отсутствующие заводятся без почты и пароля. Если игра с таким
+        идентификатором уже есть, нужен `asNewGame`.
+      operationId: importGame
+      tags: [export]
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: asNewGame
+          in: query
+          required: false
+          description: Восстановить рядом с оригиналом под новым идентификатором игры
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Снимок, полученный из `export.json`
+      responses:
+        '201':
+          description: Игра восстановлена
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gameId]
+                properties:
+                  gameId: { type: string, format: uuid }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /games/{id}/locations:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -2299,6 +2422,45 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+  /ops/metrics:
+    get:
+      summary: Числа эксплуатации узла
+      description: |
+        Служебный контур (`PLAN` O02, `D-147`): живые сокеты по играм, загрузка пула
+        LLM и размер журнала. Аутентификация — заголовок `X-Ops-Token` из окружения,
+        а не сессия игрока: мониторинг обращается без cookie, а мастер игры не должен
+        видеть числа всего узла. Пустой токен выключает маршрут (404).
+      operationId: opsMetrics
+      tags: [ops]
+      parameters:
+        - $ref: '#/components/parameters/OpsToken'
+      responses:
+        '200':
+          description: Числа узла
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpsMetrics' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /ops/orphans/dry-run:
+    post:
+      summary: Сухой прогон орфан-сборки
+      description: |
+        Перечисляет ассеты, которые удалила бы плановая сборка (`D-077`), и ничего не
+        удаляет. Нужен потому, что плановый прогон пишет только в лог: «сколько мусора»
+        спрашивают до удаления, а не после.
+      operationId: opsOrphanDryRun
+      tags: [ops]
+      parameters:
+        - $ref: '#/components/parameters/OpsToken'
+      responses:
+        '200':
+          description: Кандидаты на удаление
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrphanReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /auth/register:
     post:
       summary: Открытая регистрация по логину и паролю
@@ -2570,6 +2732,12 @@ components:
       in: cookie
       name: CHATTERGAME_SESSION
   parameters:
+    OpsToken:
+      name: X-Ops-Token
+      in: header
+      required: true
+      description: Служебный токен из `CHATTERGAME_OPS_TOKEN` (`D-147`)
+      schema: { type: string }
     CredentialId:
       name: id
       in: path
@@ -2800,6 +2968,59 @@ components:
         privateDescription: { type: [string, 'null'] }
         visibility: { type: [string, 'null'], enum: [PRIVATE, PUBLIC, 'null'] }
         turnBased: { type: [boolean, 'null'], description: Пошаговый режим (`D-012`) }
+    ArchiveRequest:
+      type: object
+      description: Причина архивации. Обязательна: архив без причины не объясняет участникам, почему игра встала (`D-010`).
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
+    OpsMetrics:
+      type: object
+      description: |
+        Числа эксплуатации (`PLAN` O02). `sockets` — живые соединения этого узла,
+        `llm` — загрузка пула вызовов модели, `journal` — размер журнала и его
+        материализации. Доменные данные здесь не отдаются.
+      required: [sockets, llm, journal]
+      properties:
+        sockets:
+          type: object
+          required: [total, byGame]
+          properties:
+            total: { type: integer }
+            byGame:
+              type: object
+              additionalProperties: { type: integer }
+        llm:
+          type: object
+          required: [active, queued, capacity]
+          properties:
+            active: { type: integer, description: Сколько игр ждёт ответа модели прямо сейчас }
+            queued: { type: integer, description: Глубина очереди вызовов }
+            capacity: { type: integer }
+        journal:
+          type: object
+          required: [events, byGame, bytes]
+          properties:
+            events: { type: integer, format: int64 }
+            byGame:
+              type: object
+              additionalProperties: { type: integer, format: int64 }
+            bytes:
+              type: object
+              additionalProperties: { type: integer, format: int64 }
+    OrphanReport:
+      type: object
+      description: Результат сухого прогона орфан-сборки (`D-077`).
+      required: [deleted, candidates, bytes, dryRun]
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+        candidates:
+          type: array
+          items: { type: string, format: uuid }
+        bytes: { type: integer, format: int64 }
+        dryRun: { type: boolean }
     TransitionRequest:
       type: object
       required: [transition]
