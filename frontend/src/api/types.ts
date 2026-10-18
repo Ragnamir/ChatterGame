@@ -51,6 +51,19 @@ export interface UpdateProfileInput {
   theme?: ThemePreference | null;
 }
 
+export type NotificationChannelName = 'NONE' | 'IN_APP' | 'EMAIL';
+
+/** Карта «событие → канал» (`D-148`): ключ текста приходит с сервера (`D-081`). */
+export interface NotificationSettings {
+  events: NotificationEntry[];
+}
+
+export interface NotificationEntry {
+  event: string;
+  channel: NotificationChannelName;
+  textKey: string;
+}
+
 export interface ProblemDetail {
   type?: string;
   title?: string;

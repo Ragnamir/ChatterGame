@@ -1178,6 +1178,64 @@ case "$stage" in
     fi
     ;;
 
+  O03)
+    # `PLAN O03`: заготовка уведомлений. Проверки адресные: этап принимается не по «класс
+    # существует», а по свойствам, которые нельзя подменить похожим кодом — карта «событие →
+    # канал» в базе, кандидаты из журнала, отсутствие транспорта и закрытого содержимого
+    # в payload (`D-070`, `D-148`).
+    if [ -f src/main/java/com/chattergame/notification/NotificationEvent.java ] \
+      && [ -f src/main/java/com/chattergame/notification/NotificationCandidates.java ] \
+      && [ -f src/main/java/com/chattergame/notification/NotificationDryRun.java ]; then
+      echo "  ok: O03 — карта событий, кандидаты и сухой прогон на месте"
+    else
+      fail=1
+      echo "FAIL: O03 требует NotificationEvent, NotificationCandidates и NotificationDryRun"
+    fi
+    # Отправки нет: ни почты, ни HTTP из пакета уведомлений (`D-070`). Появившийся транспорт
+    # без отдельного решения сделал бы этап «заготовкой», которая уже пишет людям.
+    if ! grep -rqE 'JavaMailSender|MailSender|RestTemplate|WebClient|HttpClient' \
+      src/main/java/com/chattergame/notification; then
+      echo "  ok: O03 — транспорт не подключён, отправка не происходит (D-070)"
+    else
+      fail=1
+      echo "FAIL: O03 — в пакете уведомлений появился транспорт (D-070)"
+    fi
+    # Текст — ключ интернализации, а не фраза; payload — только идентификаторы (`D-081`, `D-046`).
+    if grep -q 'notification\.' src/main/java/com/chattergame/notification/NotificationEvent.java \
+      && ! grep -qE '"(body|text)"' src/main/java/com/chattergame/notification/NotificationCandidates.java; then
+      echo "  ok: O03 — текст по ключу, закрытого содержимого в payload нет (D-046)"
+    else
+      fail=1
+      echo "FAIL: O03 требует ключей интернализации и отсутствия тела сообщения в payload (D-046)"
+    fi
+    # Настройка лежит в `notification_preference`, а не в памяти процесса (`D-148`).
+    if grep -q 'notification_preference' \
+      src/main/java/com/chattergame/notification/NotificationPreferenceRepository.java; then
+      echo "  ok: O03 — карта «событие → канал» хранится в notification_preference"
+    else
+      fail=1
+      echo "FAIL: O03 требует хранения настройки в notification_preference"
+    fi
+    if grep -rq 'RequestMapping("/me/notifications")' src/main/java/com/chattergame/web/notification; then
+      echo "  ok: O03 — настройка доступна через /me/notifications"
+    else
+      fail=1
+      echo "FAIL: O03 требует эндпоинта /me/notifications"
+    fi
+    if find src/test/java -name 'O03*Test.java' | grep -q .; then
+      echo "  ok: O03 — тесты этапа присутствуют"
+    else
+      fail=1
+      echo "FAIL: O03 требует тестов этапа (O03*Test.java)"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: O03 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: O03 — нарушены словарь или доступность"
+    fi
+    ;;
+
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

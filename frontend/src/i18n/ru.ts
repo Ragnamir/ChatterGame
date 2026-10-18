@@ -117,6 +117,21 @@ export const ru = {
   'profile.saving': 'Сохраняем…',
   'profile.saved': 'Профиль сохранён',
 
+  'notifications.title': 'Уведомления',
+  'notifications.hint': 'Куда сообщать о событиях игры. Отправка пока не подключена: настройка сохраняется заранее.',
+  'notifications.channelLabel': 'Канал',
+  'notifications.channel.NONE': 'Не беспокоить',
+  'notifications.channel.IN_APP': 'В приложении',
+  'notifications.channel.EMAIL': 'Письмом',
+  'notifications.save': 'Сохранить уведомления',
+  'notifications.saving': 'Сохраняем…',
+  'notifications.saved': 'Настройки уведомлений сохранены',
+  'notification.whisperInvitation': 'Приглашение в шёпот',
+  'notification.masterReply': 'Ответ мастера',
+  'notification.turnOpened': 'Открыт ход',
+  'notification.characterRevealed': 'Персонаж вышел из тени',
+  'notification.itemOffered': 'Вам оставили предмет',
+
   'games.open': 'Открыть комнату',
 
   'membership.role.MASTER': 'мастер',
@@ -377,6 +392,8 @@ export const ru = {
   'errors.mail_unavailable': 'Почта недоступна: письмо не отправлено, попробуйте позже.',
   'errors.invalid_password': 'Пароль не подходит по длине.',
   'errors.rate_limited': 'Слишком много попыток. Попробуйте позже.',
+  'errors.notification_event_unknown': 'Неизвестное событие уведомления.',
+  'errors.notification_channel_unknown': 'Неизвестный канал уведомления.',
 
   'aria.error': 'Ошибка',
   'aria.filters': 'Фильтры списка игр',

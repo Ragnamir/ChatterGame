@@ -2591,6 +2591,46 @@ paths:
           headers:
             Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/notifications:
+    get:
+      summary: Карта «событие → канал» уведомлений
+      description: |
+        Возвращаются все события словаря, включая те, что человек не менял: значение
+        по умолчанию задано кодом (`D-148`). Отправка на `O03` не подключена (`D-070`).
+      operationId: getNotificationSettings
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Настройки уведомлений
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      summary: Частичное обновление каналов уведомлений
+      description: |
+        Тело — объект «событие → канал». Названные события меняются, остальные остаются
+        как были. Неизвестное событие или канал отклоняется с `400`, а не игнорируется:
+        иначе опечатка выглядела бы сохранённой настройкой (`D-148`).
+      operationId: updateNotificationSettings
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSettingsPatch' }
+      responses:
+        '200':
+          description: Настройки после обновления
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
   /me/email/verification:
     post:
       summary: Повторное письмо подтверждения адреса
@@ -2865,6 +2905,26 @@ components:
         displayName: { type: [string, 'null'], maxLength: 128 }
         email: { type: [string, 'null'], maxLength: 320 }
         theme: { type: [string, 'null'], enum: [system, light, dark, 'null'] }
+    NotificationSettings:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/NotificationEntry' }
+    NotificationEntry:
+      type: object
+      required: [event, channel, textKey]
+      properties:
+        event: { type: string }
+        channel: { $ref: '#/components/schemas/NotificationChannel' }
+        textKey: { type: string }
+    NotificationChannel:
+      type: string
+      enum: [NONE, IN_APP, EMAIL]
+    NotificationSettingsPatch:
+      type: object
+      additionalProperties: { $ref: '#/components/schemas/NotificationChannel' }
     ChangePasswordRequest:
       type: object
       required: [currentPassword, newPassword]

@@ -13,6 +13,8 @@ import type {
   LoginInput,
   Membership,
   Note,
+  NotificationChannelName,
+  NotificationSettings,
   Placement,
   PostMessageInput,
   RegisterInput,
@@ -47,6 +49,10 @@ export const gamesApi = {
 export const profileApi = {
   update: (input: UpdateProfileInput): Promise<UserProfile> => api.patch('/me', input),
   resendEmailVerification: (): Promise<void> => api.post('/me/email/verification'),
+  notifications: (): Promise<NotificationSettings> => api.get('/me/notifications'),
+  updateNotifications: (
+    changes: Readonly<Record<string, NotificationChannelName>>,
+  ): Promise<NotificationSettings> => api.patch('/me/notifications', changes),
 };
 
 export const roomApi = {

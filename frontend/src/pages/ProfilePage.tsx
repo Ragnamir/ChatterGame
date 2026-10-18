@@ -1,8 +1,13 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { profileApi } from '../api/endpoints';
-import type { ThemePreference } from '../api/types';
+import type {
+  NotificationChannelName,
+  NotificationEntry,
+  NotificationSettings,
+  ThemePreference,
+} from '../api/types';
 import { Notice, describeError } from '../components/Notice';
-import { translate } from '../i18n/ru';
+import { hasMessageKey, translate, type MessageKey } from '../i18n/ru';
 import { applyTheme, storeTheme } from '../lib/theme';
 import { emptyToNull } from '../lib/validation';
 import { useSession } from '../session/SessionProvider';
@@ -12,6 +17,14 @@ const THEME_LABEL = {
   system: 'profile.theme.system',
   light: 'profile.theme.light',
   dark: 'profile.theme.dark',
+} as const;
+
+const CHANNELS: readonly NotificationChannelName[] = ['NONE', 'IN_APP', 'EMAIL'];
+
+const CHANNEL_LABEL = {
+  NONE: 'notifications.channel.NONE',
+  IN_APP: 'notifications.channel.IN_APP',
+  EMAIL: 'notifications.channel.EMAIL',
 } as const;
 
 export function ProfilePage() {
@@ -24,6 +37,28 @@ export function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [resendBusy, setResendBusy] = useState(false);
   const [resendSent, setResendSent] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationEntry[]>([]);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const [notificationsSaved, setNotificationsSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    profileApi
+      .notifications()
+      .then((settings: NotificationSettings) => {
+        if (!cancelled) {
+          setNotifications(settings.events);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setFailure(describeError(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!user) {
     return null;
@@ -62,6 +97,28 @@ export function ProfilePage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onNotificationsSubmit(event: FormEvent) {
+    event.preventDefault();
+    setNotificationsBusy(true);
+    setFailure(null);
+    setNotificationsSaved(false);
+    try {
+      const settings = await profileApi.updateNotifications(
+        Object.fromEntries(notifications.map((entry) => [entry.event, entry.channel])),
+      );
+      setNotifications(settings.events);
+      setNotificationsSaved(true);
+    } catch (error) {
+      setFailure(describeError(error));
+    } finally {
+      setNotificationsBusy(false);
+    }
+  }
+
+  function textKeyOf(entry: NotificationEntry): MessageKey {
+    return hasMessageKey(entry.textKey) ? entry.textKey : 'notifications.title';
   }
 
   return (
@@ -179,6 +236,56 @@ export function ProfilePage() {
             <button className="button button--primary" type="submit" disabled={busy}>
               {busy ? translate('profile.saving') : translate('profile.save')}
             </button>
+          </div>
+        </div>
+      </form>
+
+      <form
+        className="panel"
+        aria-labelledby="profile-notifications"
+        noValidate
+        onSubmit={(event) => void onNotificationsSubmit(event)}
+      >
+        <h2 id="profile-notifications">{translate('notifications.title')}</h2>
+        <p className="panel__hint">{translate('notifications.hint')}</p>
+        <div className="form">
+          {notifications.map((entry) => (
+            <div className="field" key={entry.event}>
+              <label htmlFor={`notification-${entry.event}`}>
+                {translate(textKeyOf(entry))}
+              </label>
+              <select
+                id={`notification-${entry.event}`}
+                aria-label={translate(textKeyOf(entry))}
+                value={entry.channel}
+                onChange={(event) => {
+                  const channel = event.target.value as NotificationChannelName;
+                  setNotifications((current) =>
+                    current.map((item) =>
+                      item.event === entry.event ? { ...item, channel } : item,
+                    ),
+                  );
+                }}
+              >
+                {CHANNELS.map((value) => (
+                  <option key={value} value={value}>
+                    {translate(CHANNEL_LABEL[value])}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+          <div className="form__actions">
+            <button className="button button--primary" type="submit" disabled={notificationsBusy}>
+              {notificationsBusy
+                ? translate('notifications.saving')
+                : translate('notifications.save')}
+            </button>
+            {notificationsSaved ? (
+              <p className="notice notice--ok" role="status">
+                {translate('notifications.saved')}
+              </p>
+            ) : null}
           </div>
         </div>
       </form>
