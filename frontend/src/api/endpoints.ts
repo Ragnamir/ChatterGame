@@ -8,12 +8,16 @@ import type {
   FeedItem,
   Game,
   GameGraph,
+  GameRequest,
+  LlmStatus,
   LoginInput,
   Membership,
   Note,
   Placement,
   PostMessageInput,
   RegisterInput,
+  RequestStatus,
+  RequestType,
   Restriction,
   RestrictionKind,
   SavedMessage,
@@ -113,3 +117,42 @@ export const notebookApi = {
 };
 
 export type { Channel, ChannelMember };
+
+/**
+ * Заявки и модель (`REQUIREMENTS §17`, §18). Решение передаёт номера операций, а не
+ * «одобрить всё»: частичное одобрение — штатный исход (`D-041`), и клиент обязан уметь
+ * назвать ровно применённые операции.
+ */
+export const requestApi = {
+  list: (gameId: string, status?: RequestStatus): Promise<GameRequest[]> =>
+    api.get(`/games/${gameId}/requests${query({ status })}`),
+  read: (gameId: string, requestId: string): Promise<GameRequest> =>
+    api.get(`/games/${gameId}/requests/${requestId}`),
+  submit: (
+    gameId: string,
+    input: {
+      type: RequestType;
+      payload: Record<string, unknown>;
+      toCharacterId?: string | null;
+      idempotencyKey?: string | null;
+    },
+  ): Promise<GameRequest> => api.post(`/games/${gameId}/requests`, input),
+  decide: (gameId: string, requestId: string, approve: number[]): Promise<GameRequest> =>
+    api.post(`/games/${gameId}/requests/${requestId}/decision`, { approve }),
+  rollback: (gameId: string, requestId: string, approve: number[]): Promise<GameRequest> =>
+    api.post(`/games/${gameId}/requests/${requestId}/rollback`, { approve }),
+};
+
+export const llmApi = {
+  status: (gameId: string): Promise<LlmStatus> => api.get(`/games/${gameId}/llm`),
+  propose: (
+    gameId: string,
+    input: {
+      type: 'CO_MASTER' | 'AUTOPILOT';
+      instruction: string;
+      chatId?: string | null;
+      characterId?: string | null;
+      idempotencyKey?: string | null;
+    },
+  ): Promise<GameRequest> => api.post(`/games/${gameId}/llm/proposals`, input),
+};

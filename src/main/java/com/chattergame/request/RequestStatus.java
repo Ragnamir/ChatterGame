@@ -19,8 +19,20 @@ public enum RequestStatus {
     PARTIALLY_APPROVED,
     EXPIRED;
 
-    /** Заявка ещё ждёт решения: только такие берёт автодекларация просрочки и одобрение. */
+    /**
+     * Заявка ещё не решена: такие берёт автодекларация просрочки.
+     *
+     * <p>`SUCCEEDED` здесь не «одобрено», а «модель ответила, операции готовы» (`D-043`):
+     * предложение LLM ждёт мастера ровно так же, как просьба игрока, и срок жизни у него
+     * тот же. `RUNNING` входит потому, что вызов модели — ожидание, а не решение, но
+     * решать по такой заявке нельзя: операции ещё не пришли ({@link #awaitingDecision()}).
+     */
     public boolean open() {
-        return this == PENDING || this == RUNNING;
+        return this == PENDING || this == RUNNING || this == SUCCEEDED;
+    }
+
+    /** По заявке можно принять решение: операции известны, вызов модели уже не идёт. */
+    public boolean awaitingDecision() {
+        return this == PENDING || this == SUCCEEDED;
     }
 }

@@ -25,7 +25,8 @@
               "move_character",
               "post_master_message",
               "update_storage_contents",
-              "create_note"
+              "create_note",
+              "post_character_message"
             ]
           },
           "payload": { "type": "object", "additionalProperties": true }
@@ -88,6 +89,17 @@
         "storageId": { "type": "string", "format": "uuid" },
         "title": { "type": ["string", "null"], "maxLength": 200 },
         "description": { "type": ["string", "null"] }
+      }
+    },
+    "post_character_message": {
+      "description": "Реплика или действие от лица персонажа, одобренная мастером (D-140). Автопилот предлагает её за отсутствующего игрока; откат невозможен, потому что отзыв сообщений запрещён (D-008).",
+      "type": "object",
+      "required": ["chatId", "characterId", "kind", "body"],
+      "properties": {
+        "chatId": { "type": "string", "format": "uuid" },
+        "characterId": { "type": "string", "format": "uuid" },
+        "kind": { "type": "string", "enum": ["SPEECH", "ACTION"] },
+        "body": { "type": "string", "minLength": 1, "maxLength": 4000 }
       }
     },
     "create_note": {

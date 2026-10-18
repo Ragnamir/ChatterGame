@@ -30,7 +30,14 @@ public enum ChangeOperationType {
     UPDATE_STORAGE_CONTENTS("update_storage_contents", true),
 
     /** Заметка в тетради. Откат невозможен: `create_note` только заводит строку (`D-055`). */
-    CREATE_NOTE("create_note", false);
+    CREATE_NOTE("create_note", false),
+
+    /**
+     * Реплика или действие от лица персонажа, предложенные автопилотом (`D-140`). Мастер
+     * одобряет её как обычную операцию, а запись идёт тем же `MessageService`, что и у
+     * мастера от лица NPC (`D-004`). Откат невозможен: отзыв сообщений запрещён (`D-008`).
+     */
+    POST_CHARACTER_MESSAGE("post_character_message", false);
 
     private final String wireName;
     private final boolean reversible;

@@ -1,0 +1,24 @@
+databaseChangeLog:
+  # F05: заявки модели — ожидание и срок жизни.
+  #
+  # Применённые `001`…`009` не редактируются никогда (`AGENTS §1`).
+  #
+  # 1. Частичный индекс просрочки расширяется статусом `SUCCEEDED` (`D-043`): ответ модели
+  #    ждёт мастера так же, как просьба игрока, и обязан истекать. Старый индекс не удаляется
+  #    и не правится — он остаётся в `009-e14.yaml` как история; новый предикат шире, поэтому
+  #    старый индекс становится его подмножеством и удаляется отдельным changeset'ом, чтобы
+  #    не держать два индекса по одной колонке.
+  # 2. `request.payload` уже есть в baseline и хранит контекст вызова модели (запрос мастера,
+  #    вид предложения). Новых колонок не нужно: `origin`, `status`, `error` и
+  #    `idempotency_key` перечислены в `REQUIREMENTS §17` и заведены заранее (`D-103`).
+
+  - changeSet:
+      id: 010-01-request-expires-succeeded
+      author: f05
+      changes:
+        - sql:
+            sql: DROP INDEX ix_request_pending_expires
+            rollback: CREATE INDEX ix_request_pending_expires ON request (expires_at) WHERE status = 'PENDING'
+        - sql:
+            sql: CREATE INDEX ix_request_awaiting_expires ON request (expires_at) WHERE status IN ('PENDING', 'SUCCEEDED')
+            rollback: DROP INDEX ix_request_awaiting_expires

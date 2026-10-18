@@ -11,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -100,6 +101,34 @@ public class LlmCredentialService {
                 .stream()
                 .findFirst()
                 .orElseThrow(LlmCredentialService::notFound);
+    }
+
+    /**
+     * Действующий ключ для вызова модели (`D-042`). Возвращается расшифрованным только здесь:
+     * до `F05` открытое значение не читалось ни одним методом, и путь утечки не существовал.
+     * Теперь он нужен вызову провайдера, поэтому сужен до одного метода с явным именем.
+     *
+     * <p>Пустой ответ — «у мастера нет активного ключа»: опции LLM в этом случае недоступны
+     * целиком, а не работают с ошибкой (`REQUIREMENTS §18`).
+     */
+    public Optional<ActiveCredential> active(UUID userId) {
+        return jdbc.query(
+                        "SELECT * FROM llm_credential WHERE user_id = ? AND active = true",
+                        MAPPER,
+                        userId)
+                .stream()
+                .findFirst()
+                .map(credential -> new ActiveCredential(
+                        credential.baseUrl(),
+                        credential.model(),
+                        cipher.decrypt(
+                                credential.secretCiphertext(),
+                                credential.secretIv(),
+                                credential.secretTag())));
+    }
+
+    /** Действующий ключ: адрес, модель и открытый секрет только на время вызова. */
+    public record ActiveCredential(String baseUrl, String model, String secret) {
     }
 
     private static ApiException notFound() {

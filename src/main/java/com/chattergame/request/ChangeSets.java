@@ -154,6 +154,15 @@ final class ChangeSets {
                     }
                 }
             }
+            case POST_CHARACTER_MESSAGE -> {
+                requireUuid(payload, "chatId", ordinal);
+                requireUuid(payload, "characterId", ordinal);
+                String kind = requireString(payload, "kind", ordinal);
+                if (!kind.equals("SPEECH") && !kind.equals("ACTION")) {
+                    throw invalid(ordinal, "реплика автопилота — SPEECH или ACTION");
+                }
+                requireText(payload, "body", ordinal, 4000);
+            }
         }
     }
 

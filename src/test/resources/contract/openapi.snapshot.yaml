@@ -2143,6 +2143,61 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /games/{id}/llm:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      summary: Доступность опций модели
+      description: |
+        Без активного ключа мастера опции LLM недоступны целиком (`D-042`, `D-093`):
+        клиент скрывает панель модели, а не показывает кнопку, которая падает. Спрашивать
+        может только мастер.
+      operationId: llmStatus
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Доступность и причина отказа
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LlmStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /games/{id}/llm/proposals:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      summary: Предложение модели
+      description: |
+        Вызов со-мастера или автопилота (`REQUIREMENTS §18`). Заявка заводится до вызова
+        со статусом `RUNNING` (`D-043`), поэтому перезапуск сервера не теряет запрос; ответ
+        становится change set и переводит её в `SUCCEEDED`, отказ провайдера — в `FAILED`
+        с машинным кодом причины (`llm_rate_limited`, `llm_timeout`,
+        `llm_invalid_response`, `llm_provider_error`, `llm_auth_failed`). Вызов идёт вне
+        транзакции (`D-044`), один одновременный запрос на игру.
+      operationId: llmPropose
+      tags: [llm]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LlmProposalRequest' }
+      responses:
+        '200':
+          description: Заявка модели в любом исходе
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Request' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /games/{id}/memberships/unban:
     parameters:
       - $ref: '#/components/parameters/GameId'
@@ -3321,7 +3376,7 @@ components:
             Change set: список `operations`, каждая с полями `op` и `payload`
             (`contract/changeset.schema.json`). Виды операций — `update_character_field`,
             `create_item`, `move_character`, `post_master_message`,
-            `update_storage_contents`, `create_note`.
+            `update_storage_contents`, `create_note`, `post_character_message`.
           additionalProperties: true
         idempotencyKey: { type: [string, 'null'], maxLength: 128 }
         expiresAt: { type: [string, 'null'], format: date-time }
@@ -3335,6 +3390,31 @@ components:
         approve:
           type: [array, 'null']
           items: { type: integer, minimum: 1 }
+    LlmStatus:
+      type: object
+      description: |
+        Доступность опций модели (`D-042`). `reason` — машинный код: `llm_not_configured`
+        означает «ключ не задан», и клиент прячет панель целиком.
+      required: [available]
+      properties:
+        available: { type: boolean }
+        reason: { type: [string, 'null'] }
+    LlmProposalRequest:
+      type: object
+      description: |
+        Запрос к модели. `type` различает со-мастера и автопилота; `characterId` и `chatId`
+        обязательны автопилоту, потому что он играет конкретного персонажа в конкретной
+        сцене (`REQUIREMENTS §18`).
+      required: [instruction]
+      properties:
+        type:
+          type: string
+          enum: [CO_MASTER, AUTOPILOT]
+          default: CO_MASTER
+        instruction: { type: string, minLength: 1, maxLength: 4000 }
+        chatId: { type: [string, 'null'], format: uuid }
+        characterId: { type: [string, 'null'], format: uuid }
+        idempotencyKey: { type: [string, 'null'], maxLength: 128 }
     Request:
       type: object
       description: |
@@ -3369,17 +3449,21 @@ components:
         друг от друга, поэтому применяются по возрастанию, а откатываются в обратном
         порядке (`D-137`). `oldValue` — прежнее значение, снятое при применении; откат
         берёт его из журнала (`D-138`).
-      required: [id, ordinal, op, status]
+      required: [id, ordinal, op, status, reversible]
       properties:
         id: { type: string, format: uuid }
         ordinal: { type: integer, minimum: 1 }
         op:
           type: string
-          enum: [update_character_field, create_item, move_character, post_master_message, update_storage_contents, create_note]
+          enum: [update_character_field, create_item, move_character, post_master_message, update_storage_contents, create_note, post_character_message]
         status:
           type: string
           enum: [PENDING, APPLIED, REJECTED, FAILED, ROLLED_BACK]
-        reason: { type: [string, 'null'] }
+        reversible:
+          type: boolean
+          description: |
+            Откат возможен. Свойство вида операции, а не её статуса (D-010): создание
+            предмета, сообщение и заметка необратимы, потому что удаление запрещено.
         payload: { type: object, additionalProperties: true }
         oldValue: { type: [object, 'null'], additionalProperties: true }
 

@@ -252,3 +252,55 @@ export interface SavedMessage {
   noteId: string | null;
   createdAt: string;
 }
+
+export type RequestStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'PARTIALLY_APPROVED'
+  | 'EXPIRED';
+
+export type RequestOrigin = 'MASTER' | 'PLAYER' | 'LLM';
+
+export type RequestType =
+  | 'CHARACTER_EDIT'
+  | 'ROLE_REQUEST'
+  | 'SLOT_QUESTION'
+  | 'CO_MASTER'
+  | 'AUTOPILOT';
+
+export type OperationStatus = 'PENDING' | 'APPLIED' | 'REJECTED' | 'FAILED' | 'ROLLED_BACK';
+
+export interface RequestOperation {
+  id: string;
+  ordinal: number;
+  op: string;
+  status: OperationStatus;
+  reversible: boolean;
+  payload: Record<string, unknown>;
+  oldValue: Record<string, unknown> | null;
+}
+
+export interface GameRequest {
+  id: string;
+  gameId: string;
+  origin: RequestOrigin;
+  type: RequestType;
+  fromMembershipId: string | null;
+  toCharacterId: string | null;
+  status: RequestStatus;
+  error: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+  payload: Record<string, unknown>;
+  operations: RequestOperation[];
+}
+
+export interface LlmStatus {
+  available: boolean;
+  reason: string | null;
+}

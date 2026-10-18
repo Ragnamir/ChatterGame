@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { GameSocket } from '../api/socket';
-import { gamesApi, notebookApi, roomApi } from '../api/endpoints';
+import { gamesApi, llmApi, notebookApi, requestApi, roomApi } from '../api/endpoints';
 import type {
   Channel,
   Character,
@@ -9,6 +9,8 @@ import type {
   FeedItem,
   Game,
   GameGraph,
+  GameRequest,
+  LlmStatus,
   Membership,
   MessageKind,
   Note,
@@ -20,9 +22,11 @@ import type {
 } from '../api/types';
 import { ChannelActions } from '../components/ChannelActions';
 import { Composer } from '../components/Composer';
+import { LlmPanel } from '../components/LlmPanel';
 import { Notebook, type NoteTarget } from '../components/Notebook';
 import { MasterPanel } from '../components/MasterPanel';
 import { Notice, describeError } from '../components/Notice';
+import { RequestPanel } from '../components/RequestPanel';
 import { RestrictionNotice } from '../components/RestrictionNotice';
 import { GameHeader, TurnPanel } from '../components/TurnPanel';
 import { TransitionMap } from '../components/TransitionMap';
@@ -90,6 +94,8 @@ export function GameRoomPage() {
   const [socketState, setSocketState] = useState<'connecting' | 'open' | 'closed'>('connecting');
   const [reconnectMs, setReconnectMs] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [requests, setRequests] = useState<GameRequest[]>([]);
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
 
   const socketRef = useRef<GameSocket | null>(null);
   const clock = useRef(new ReconnectClock());
@@ -155,6 +161,32 @@ export function GameRoomPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Очередь заявок и доступность модели — только мастеру (`REQUIREMENTS §17`): игроку
+   * собственные заявки показывает другой экран, а очередь мастера — не публичная лента.
+   * Ошибка загрузки не валит комнату: комната живёт и без панели заявок.
+   */
+  const loadRequests = useCallback(async () => {
+    if (!gameId || !isMaster) {
+      return;
+    }
+    try {
+      const [queue, status] = await Promise.all([
+        requestApi.list(gameId),
+        llmApi.status(gameId),
+      ]);
+      setRequests(queue);
+      setLlmStatus(status);
+    } catch {
+      setRequests([]);
+      setLlmStatus(null);
+    }
+  }, [gameId, isMaster]);
+
+  useEffect(() => {
+    void loadRequests();
+  }, [loadRequests]);
 
   useEffect(() => {
     if (!data) {
@@ -445,6 +477,30 @@ export function GameRoomPage() {
   async function revoke(restrictionId: string): Promise<void> {
     await roomApi.revokeRestriction(gameId, restrictionId);
     await refresh();
+  }
+
+  async function decide(requestId: string, approve: number[]): Promise<void> {
+    await requestApi.decide(gameId, requestId, approve);
+    await loadRequests();
+    await refresh();
+  }
+
+  async function rollback(requestId: string, approve: number[]): Promise<void> {
+    await requestApi.rollback(gameId, requestId, approve);
+    await loadRequests();
+    await refresh();
+  }
+
+  async function propose(input: {
+    type: 'CO_MASTER' | 'AUTOPILOT';
+    instruction: string;
+    chatId: string | null;
+    characterId: string | null;
+  }): Promise<void> {
+    await llmApi.propose(gameId, input);
+    // Ответ модели приходит заявкой: очередь обновляется, а мир меняется только после
+    // решения мастера (`D-040`), поэтому ленту здесь перечитывать не нужно.
+    await loadRequests();
   }
 
   async function openTurn(): Promise<void> {
@@ -769,16 +825,25 @@ export function GameRoomPage() {
       />
 
       {isMaster ? (
-        <MasterPanel
-          characters={data.characters}
-          nodes={data.graph.nodes}
-          memberships={data.memberships}
-          restrictions={data.restrictions}
-          onMove={move}
-          onStealth={stealth}
-          onRestrict={restrict}
-          onRevoke={revoke}
-        />
+        <>
+          <RequestPanel requests={requests} onDecide={decide} onRollback={rollback} />
+          <LlmPanel
+            status={llmStatus}
+            characters={data.characters}
+            channels={data.channels}
+            onPropose={propose}
+          />
+          <MasterPanel
+            characters={data.characters}
+            nodes={data.graph.nodes}
+            memberships={data.memberships}
+            restrictions={data.restrictions}
+            onMove={move}
+            onStealth={stealth}
+            onRestrict={restrict}
+            onRevoke={revoke}
+          />
+        </>
       ) : null}
     </>
   );

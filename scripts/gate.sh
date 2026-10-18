@@ -941,6 +941,87 @@ case "$stage" in
       echo "FAIL: F04 — прод-сборка не собрана"
     fi
     ;;
+  F05)
+    # `PLAN F05`: заявки и панель мастера для LLM. Проверки привязаны к решениям, которые
+    # нельзя подменить «похожим» экраном: дифф по операциям, частичное одобрение, различие
+    # классов отказа модели и скрытие опций без ключа (`D-042`, `D-043`).
+    if [ ! -d frontend/node_modules ]; then
+      fail=1
+      echo "FAIL: F05 — зависимости фронта не установлены (cd frontend && npm ci)"
+    else
+      echo "  ok: F05 — зависимости фронта на месте"
+    fi
+    if [ -f src/main/resources/db/changelog/changes/010-f05.yaml ] \
+      && grep -q '010-f05.yaml' src/main/resources/db/changelog/db.changelog-master.yaml; then
+      echo "  ok: F05 — миграция этапа подключена"
+    else
+      fail=1
+      echo "FAIL: F05 требует changes/010-f05.yaml в changelog"
+    fi
+    # Вызов модели не обёрнут транзакцией (`D-044`): иначе десятки секунд ожидания выбирают
+    # пул Hikari до нуля.
+    if grep -rq 'class LlmProposalService' src/main/java/com/chattergame/llm \
+      && ! grep -q '@Transactional' src/main/java/com/chattergame/llm/LlmProposalService.java \
+      && grep -rq 'LlmCallExecutor' src/main/java/com/chattergame/llm; then
+      echo "  ok: F05 — вызов модели вне транзакции и на ограниченном пуле (D-044)"
+    else
+      fail=1
+      echo "FAIL: F05 требует вызова модели вне транзакции (D-044)"
+    fi
+    # Классы отказа различимы машинным кодом, а не общим текстом (`D-043`).
+    if grep -q 'llm_rate_limited' src/main/java/com/chattergame/llm/LlmErrorKind.java \
+      && grep -q 'llm_timeout' src/main/java/com/chattergame/llm/LlmErrorKind.java \
+      && grep -q 'llm_invalid_response' src/main/java/com/chattergame/llm/LlmErrorKind.java; then
+      echo "  ok: F05 — классы отказа модели различимы (D-043)"
+    else
+      fail=1
+      echo "FAIL: F05 требует различимых кодов отказа модели (D-043)"
+    fi
+    # Без активного ключа опции скрыты целиком, а не активны с ошибкой (`D-042`).
+    if grep -q 'llm.unavailable' frontend/src/components/LlmPanel.tsx \
+      && grep -q 'available' frontend/src/components/LlmPanel.tsx; then
+      echo "  ok: F05 — панель модели скрыта без ключа (D-042)"
+    else
+      fail=1
+      echo "FAIL: F05 требует скрытия опций модели без ключа (D-042)"
+    fi
+    # Частичное одобрение по операциям: решение передаёт номера, а не «одобрить всё».
+    if grep -q 'pendingOrdinals' frontend/src/components/RequestPanel.tsx \
+      && grep -q 'onDecide' frontend/src/components/RequestPanel.tsx \
+      && grep -q 'diffOf' frontend/src/components/RequestPanel.tsx; then
+      echo "  ok: F05 — очередь заявок с диффом и выбором операций"
+    else
+      fail=1
+      echo "FAIL: F05 требует очереди заявок с диффом и выбором операций"
+    fi
+    # Обратимость — свойство вида операции, а не строка причины в представлении.
+    if grep -q 'reversible' src/main/java/com/chattergame/web/request/RequestView.java \
+      && grep -q 'reversible' src/main/resources/openapi/openapi.yaml; then
+      echo "  ok: F05 — клиент узнаёт необратимость до отката (D-010)"
+    else
+      fail=1
+      echo "FAIL: F05 требует признака reversible в контракте операции"
+    fi
+    if [ -f frontend/tests/F05Requests.test.ts ] \
+      && (cd frontend && node --test tests/F05Requests.test.ts); then
+      echo "  ok: F05 — тесты заявок и диффа пройдены"
+    else
+      fail=1
+      echo "FAIL: F05 — тесты заявок и диффа провалены"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: F05 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: F05 — нарушены словарь или доступность"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: F05 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: F05 — прод-сборка не собрана"
+    fi
+    ;;
 
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"

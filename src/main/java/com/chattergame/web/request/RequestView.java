@@ -32,7 +32,7 @@ public record RequestView(
             int ordinal,
             String op,
             String status,
-            String reason,
+            boolean reversible,
             Map<String, Object> payload,
             Map<String, Object> oldValue) {
     }

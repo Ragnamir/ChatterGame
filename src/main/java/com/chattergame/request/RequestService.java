@@ -171,6 +171,127 @@ public class RequestService {
     }
 
     /**
+     * Заявка модели заводится <em>до</em> вызова провайдера (`D-043`, `PLAN F05`): строка
+     * со статусом `RUNNING` фиксирует ожидание в БД, поэтому перезапуск сервера не теряет
+     * факт запроса, а мастер видит, что предложение готовится, а не что его нет.
+     *
+     * <p>Событие пишется здесь же и одно на всю заявку: `REQUEST_SUBMITTED` означает
+     * «заявка заведена» (`D-134`), а не «модель ответила». Отдельного типа для ответа
+     * модели словарь не содержит, и вводить его ради строки состояния значило бы расширять
+     * контракт там, где хватает колонки `status`; решение мастера по-прежнему оставляет
+     * `REQUEST_DECIDED`.
+     *
+     * <p>Повтор с тем же ключом возвращает прежнюю заявку и признак «уже была»: вызывающий
+     * по нему пропускает вызов провайдера, а не платит за него второй раз.
+     */
+    @Transactional
+    public LlmStart beginLlm(
+            UUID actorUserId,
+            UUID gameId,
+            RequestType type,
+            UUID toCharacterId,
+            Map<String, Object> context,
+            String idempotencyKey) {
+        Membership master = requireMaster(actorUserId, gameId);
+        if (type != RequestType.CO_MASTER && type != RequestType.AUTOPILOT) {
+            throw ApiException.badRequest(
+                    "invalid_request_type", "Модель отвечает на заявки CO_MASTER и AUTOPILOT");
+        }
+        String key = normalizeKey(idempotencyKey);
+        if (key != null) {
+            Optional<GameRequest> existing = requests.findByIdempotencyKey(gameId, key);
+            if (existing.isPresent()) {
+                return new LlmStart(existing.get(), false);
+            }
+        }
+        Instant now = Instant.now();
+        GameRequest request = new GameRequest(
+                Uuids.v7(),
+                gameId,
+                RequestOrigin.LLM,
+                type,
+                master.id(),
+                toCharacterId,
+                context == null ? Map.of() : context,
+                RequestStatus.RUNNING,
+                null,
+                key,
+                now,
+                now,
+                now.plus(defaultTtl));
+        if (!requests.insert(request)) {
+            return new LlmStart(
+                    requests.findByIdempotencyKey(gameId, key)
+                            .orElseThrow(() -> ApiException.conflict(
+                                    "request_exists", "Заявка с таким ключом уже подана")),
+                    false);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("requestId", request.id().toString());
+        payload.put("origin", RequestOrigin.LLM.name());
+        payload.put("requestType", type.name());
+        payload.put("status", RequestStatus.RUNNING.name());
+        mutations.appendEvent(gameId, GameEventType.REQUEST_SUBMITTED, actorUserId, payload);
+        return new LlmStart(requests.findById(gameId, request.id()).orElseThrow(), true);
+    }
+
+    /**
+     * Ответ модели разобран и стал операциями (`D-043`). Невалидный change set не применяется
+     * частично: заявка получает `FAILED` и код причины, а операции не появляются вовсе.
+     *
+     * <p>Ответ на уже закрытую заявку игнорируется: вызов мог завершиться после того, как
+     * мастер отклонил ожидание, и перезаписывать решение нельзя.
+     */
+    @Transactional
+    public GameRequest completeLlm(UUID gameId, UUID requestId, Map<String, Object> answer) {
+        GameRequest request = find(gameId, requestId);
+        if (request.status() != RequestStatus.RUNNING) {
+            return request;
+        }
+        List<ChangeSets.Planned> planned;
+        try {
+            planned = ChangeSets.parse(answer);
+        } catch (ApiException invalid) {
+            return failLlm(gameId, requestId, "llm_invalid_response", invalid.getMessage());
+        }
+        for (ChangeSets.Planned item : planned) {
+            operations.insert(new RequestOperation(
+                    Uuids.v7(),
+                    requestId,
+                    item.ordinal(),
+                    item.op(),
+                    item.payload(),
+                    OperationStatus.PENDING.name(),
+                    null));
+        }
+        requests.updateStatus(gameId, requestId, RequestStatus.SUCCEEDED, null, Instant.now());
+        return find(gameId, requestId);
+    }
+
+    /**
+     * Отказ вызова модели — штатное состояние (`D-043`): заявка остаётся в истории со
+     * статусом `FAILED` и машинным кодом причины, потому что лимит, таймаут и невалидный
+     * ответ лечатся по-разному и не должны выглядеть одинаково.
+     *
+     * <p>Код и подробность разделены двоеточием: клиент переводит код по ключу
+     * интернализации, а подробность показывает мастеру как есть.
+     */
+    @Transactional
+    public GameRequest failLlm(UUID gameId, UUID requestId, String code, String detail) {
+        GameRequest request = find(gameId, requestId);
+        if (request.status() != RequestStatus.RUNNING) {
+            return request;
+        }
+        String error = detail == null || detail.isBlank() ? code : code + ": " + detail;
+        requests.updateStatus(gameId, requestId, RequestStatus.FAILED, error, Instant.now());
+        return find(gameId, requestId);
+    }
+
+    /** Начало заявки модели: заявка и признак «строка создана этим вызовом». */
+    public record LlmStart(GameRequest request, boolean created) {
+    }
+
+    /**
      * Решение мастера (`PLAN` E14, задача 3): названные операции применяются, остальные
      * отклоняются. Итог — `APPROVED`, `PARTIALLY_APPROVED`, `REJECTED` или `FAILED`, и он
      * не выводится из «сколько операций было», а считается по факту применения (`D-135`).
@@ -276,6 +397,20 @@ public class RequestService {
                     operationId);
             case CREATE_NOTE -> {
                 notes.create(master.userId(), gameId, noteDraft(master, payload));
+                yield null;
+            }
+            case POST_CHARACTER_MESSAGE -> {
+                // Автопилот говорит за персонажа, а пишет мастер: `onBehalfOfMaster` — тот же
+                // признак, что у мастера за NPC (`D-004`), поэтому лента не выдаёт автора
+                // модели, а права проверяются как обычно (`D-065`).
+                messages.post(
+                        master.userId(),
+                        gameId,
+                        ChangeSets.uuidOf(payload, "chatId"),
+                        ChangeSets.uuidOf(payload, "characterId"),
+                        MessageKind.valueOf(string(payload, "kind")),
+                        string(payload, "body"),
+                        true);
                 yield null;
             }
         };
@@ -542,7 +677,13 @@ public class RequestService {
 
     private GameRequest requireOpen(UUID gameId, UUID requestId) {
         GameRequest request = find(gameId, requestId);
-        if (!request.status().open()) {
+        if (request.status() == RequestStatus.RUNNING) {
+            // Модель ещё отвечает: операции появятся в конце вызова, и решение сейчас
+            // записало бы итог по пустому набору (`D-043`).
+            throw ApiException.conflict(
+                    "request_running", "Модель ещё готовит предложение: дождитесь ответа");
+        }
+        if (!request.status().awaitingDecision()) {
             throw ApiException.conflict(
                     "request_closed", "По заявке уже принято решение: " + request.status());
         }

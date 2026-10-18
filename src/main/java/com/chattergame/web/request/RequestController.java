@@ -1,7 +1,6 @@
 package com.chattergame.web.request;
 
 import com.chattergame.request.GameRequest;
-import com.chattergame.request.RequestOperation;
 import com.chattergame.request.RequestOrigin;
 import com.chattergame.request.RequestService;
 import com.chattergame.request.RequestStatus;
@@ -43,10 +42,13 @@ public class RequestController {
 
     private final RequestService requests;
     private final MembershipRepository memberships;
+    private final RequestViews views;
 
-    public RequestController(RequestService requests, MembershipRepository memberships) {
+    public RequestController(
+            RequestService requests, MembershipRepository memberships, RequestViews views) {
         this.requests = requests;
         this.memberships = memberships;
+        this.views = views;
     }
 
     /**
@@ -68,7 +70,7 @@ public class RequestController {
                         request.payload(),
                         request.idempotencyKey(),
                         request.expiresAt()));
-        return ResponseEntity.ok(view(gameId, submitted));
+        return ResponseEntity.ok(views.view(gameId, submitted));
     }
 
     /** Очередь заявок: мастеру — вся, участнику — свои (`REQUIREMENTS §17`). */
@@ -79,7 +81,7 @@ public class RequestController {
             AuthContext context) {
         AuthContext auth = AuthContextResolver.require(context);
         return requests.list(auth.user().id(), gameId, status(status)).stream()
-                .map(request -> view(gameId, request))
+                .map(request -> views.view(gameId, request))
                 .toList();
     }
 
@@ -89,7 +91,7 @@ public class RequestController {
         AuthContext auth = AuthContextResolver.require(context);
         GameRequest request = requests.find(gameId, requestId);
         requireVisible(auth.user().id(), gameId, request);
-        return view(gameId, request);
+        return views.view(gameId, request);
     }
 
     /**
@@ -107,7 +109,7 @@ public class RequestController {
         List<Integer> approve = request == null || request.approve() == null
                 ? List.of()
                 : List.copyOf(request.approve());
-        return view(gameId, requests.decide(auth.user().id(), gameId, requestId, approve));
+        return views.view(gameId, requests.decide(auth.user().id(), gameId, requestId, approve));
     }
 
     /** Откат применённых операций: обратимые возвращают прежнее значение из журнала. */
@@ -121,47 +123,7 @@ public class RequestController {
         List<Integer> ordinals = request == null || request.approve() == null
                 ? null
                 : List.copyOf(request.approve());
-        return view(gameId, requests.rollback(auth.user().id(), gameId, requestId, ordinals));
-    }
-
-    private RequestView view(UUID gameId, GameRequest request) {
-        List<RequestView.OperationView> operations = requests.operationsOf(request.id()).stream()
-                .map(RequestController::operation)
-                .toList();
-        return new RequestView(
-                request.id().toString(),
-                gameId.toString(),
-                request.origin().name(),
-                request.type().name(),
-                string(request.fromMembershipId()),
-                string(request.toCharacterId()),
-                request.status().name(),
-                request.error(),
-                request.idempotencyKey(),
-                request.createdAt().toString(),
-                request.expiresAt() == null ? null : request.expiresAt().toString(),
-                request.payload(),
-                operations);
-    }
-
-    private static RequestView.OperationView operation(RequestOperation operation) {
-        return new RequestView.OperationView(
-                operation.id().toString(),
-                operation.ordinal(),
-                operation.op().wireName(),
-                operation.statusOf().name(),
-                reason(operation),
-                operation.payload(),
-                operation.oldValue());
-    }
-
-    /**
-     * Причина выводится из свойства операции, а не хранится рядом со статусом: статус
-     * меняется, а «удаление запрещено» — никогда (`D-010`). Поэтому клиент узнаёт о
-     * необратимости до нажатия, а не из отказа после.
-     */
-    private static String reason(RequestOperation operation) {
-        return operation.op().reversible() ? null : "необратима: удаление запрещено (D-010)";
+        return views.view(gameId, requests.rollback(auth.user().id(), gameId, requestId, ordinals));
     }
 
     /** Чужая заявка мастеру видна, участнику — нет: очередь мастера не публичная лента. */
@@ -174,10 +136,6 @@ public class RequestController {
         if (!membership.id().equals(request.fromMembershipId())) {
             throw ApiException.forbidden("request_not_visible", "Эта заявка подана не вами");
         }
-    }
-
-    private static String string(UUID value) {
-        return value == null ? null : value.toString();
     }
 
     private static RequestOrigin origin(String raw) {

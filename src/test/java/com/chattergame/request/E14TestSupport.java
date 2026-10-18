@@ -26,7 +26,7 @@ import java.util.UUID;
  * перемещения обязан вернуть персонажа в прежнюю локацию. Без второй локации и ребра
  * между ними критерий «откат применяет старые значения» проверить нечем.
  */
-abstract class E14TestSupport extends E02TestSupport {
+public abstract class E14TestSupport extends E02TestSupport {
 
     @Autowired
     protected GameMutationService mutations;
@@ -37,7 +37,7 @@ abstract class E14TestSupport extends E02TestSupport {
     @Autowired
     protected RequestService requests;
 
-    protected final class Account {
+    public final class Account {
         final UUID userId;
         final String login;
         final String token;
@@ -46,6 +46,14 @@ abstract class E14TestSupport extends E02TestSupport {
             this.userId = userId;
             this.login = login;
             this.token = token;
+        }
+
+        public String token() {
+            return token;
+        }
+
+        public UUID userId() {
+            return userId;
         }
     }
 
@@ -63,7 +71,7 @@ abstract class E14TestSupport extends E02TestSupport {
      * Мир заявок: мастер, игрок, две локации с ребром, персонаж в первой и хранилище там же.
      * Игра доводится до `RUNNING`: `READY` нужен, чтобы в неё мог войти игрок (`D-132`).
      */
-    protected final class Fixture {
+    public final class Fixture {
         final Account master;
         final Account player;
         final UUID gameId;
@@ -92,9 +100,37 @@ abstract class E14TestSupport extends E02TestSupport {
             this.storageId = storageId;
         }
 
-        String fieldOf(String column) {
+        public String fieldOf(String column) {
             return jdbc.queryForObject(
                     "SELECT " + column + " FROM character WHERE id = ?", String.class, characterId);
+        }
+
+        public UUID game() {
+            return gameId;
+        }
+
+        public UUID character() {
+            return characterId;
+        }
+
+        public UUID place() {
+            return place;
+        }
+
+        public UUID storage() {
+            return storageId;
+        }
+
+        public UUID transition() {
+            return transitionId;
+        }
+
+        public Account master() {
+            return master;
+        }
+
+        public Account player() {
+            return player;
         }
 
         UUID locationOf() {
@@ -109,7 +145,7 @@ abstract class E14TestSupport extends E02TestSupport {
                     "SELECT title FROM storage WHERE id = ?", String.class, storageId);
         }
 
-        long itemCount() {
+        public long itemCount() {
             return countRows(
                     "SELECT count(*) FROM item WHERE game_id = ? AND name LIKE 'Заявка-%'", gameId);
         }
