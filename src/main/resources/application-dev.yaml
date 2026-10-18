@@ -2,6 +2,7 @@
 chattergame:
   mail:
     auto-verify-email: true
+    link-base: http://localhost:5173
 
 logging:
   level:

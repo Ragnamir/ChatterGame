@@ -5,6 +5,7 @@ auth_identity
 character
 chat
 chat_member
+email_verification_token
 game
 game_event
 game_stream

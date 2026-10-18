@@ -9,15 +9,26 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 /**
  * Профиль `prod`: без настроенного SMTP приложение не стартует, потому что письма
  * подтверждения и сброса пароля — часть контракта, а не опция ({@code D-079}).
+ *
+ * <p>Учётные данные берутся только из окружения (`D-079`, `D-144`): локальный релей
+ * обходится без них, а публичный провайдер требует. Пустой логин означает «без
+ * аутентификации», а не «забыли настроить»: так же ведёт себя локальный постфикс.
  */
 @Configuration
 @Profile("prod")
 public class MailConfiguration {
 
+    private static final String TIMEOUT_MS = "10000";
+
     @Bean
     MailSender mailSender(
             @Value("${spring.mail.host:}") String host,
-            @Value("${chattergame.mail.from:}") String from) {
+            @Value("${spring.mail.port:587}") int port,
+            @Value("${spring.mail.username:}") String username,
+            @Value("${spring.mail.password:}") String password,
+            @Value("${chattergame.mail.from:}") String from,
+            @Value("${chattergame.mail.starttls:true}") boolean starttls,
+            @Value("${chattergame.mail.link-base:}") String linkBase) {
         if (host.isBlank()) {
             throw new IllegalStateException(
                     "Профиль prod требует настроенный SMTP: задайте spring.mail.host (D-079)");
@@ -26,8 +37,27 @@ public class MailConfiguration {
             throw new IllegalStateException(
                     "Профиль prod требует chattergame.mail.from (D-079)");
         }
+        if (linkBase.isBlank()) {
+            // Ссылка в письме должна быть абсолютной: из почтового клиента относительный
+            // путь никуда не ведёт (D-142).
+            throw new IllegalStateException(
+                    "Профиль prod требует chattergame.mail.link-base (D-142)");
+        }
         JavaMailSenderImpl javaMailSender = new JavaMailSenderImpl();
         javaMailSender.setHost(host);
+        javaMailSender.setPort(port);
+        javaMailSender.setDefaultEncoding("UTF-8");
+        if (!username.isBlank()) {
+            javaMailSender.setUsername(username);
+            javaMailSender.setPassword(password);
+        }
+        javaMailSender.getJavaMailProperties().setProperty("mail.smtp.auth", Boolean.toString(!username.isBlank()));
+        javaMailSender.getJavaMailProperties().setProperty("mail.smtp.starttls.enable", Boolean.toString(starttls));
+        // Таймауты обязательны: без них недоступный SMTP держит поток запроса до таймаута ОС,
+        // и регистрация «висит» вместо того, чтобы отдать ответ (`D-044` по духу).
+        javaMailSender.getJavaMailProperties().setProperty("mail.smtp.connectiontimeout", TIMEOUT_MS);
+        javaMailSender.getJavaMailProperties().setProperty("mail.smtp.timeout", TIMEOUT_MS);
+        javaMailSender.getJavaMailProperties().setProperty("mail.smtp.writetimeout", TIMEOUT_MS);
         return new SmtpMailSender(javaMailSender, from);
     }
 }

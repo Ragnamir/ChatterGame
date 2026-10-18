@@ -3,10 +3,17 @@ spring:
   mail:
     host: ${CHATTERGAME_SMTP_HOST:}
     port: ${CHATTERGAME_SMTP_PORT:587}
+    # Учётные данные только из окружения (D-079, D-144). Пустой логин — релей без auth.
+    username: ${CHATTERGAME_SMTP_USER:}
+    password: ${CHATTERGAME_SMTP_PASSWORD:}
 
 chattergame:
   mail:
     from: ${CHATTERGAME_MAIL_FROM:}
+    # Абсолютный адрес приложения: ссылки в письмах открывают из почтового клиента,
+    # и относительный путь там бесполезен (D-142).
+    link-base: ${CHATTERGAME_PUBLIC_URL:}
+    starttls: ${CHATTERGAME_SMTP_STARTTLS:true}
   session:
     # Прод живёт за TLS, поэтому cookie сессии уходит только по https.
     cookie-secure: true

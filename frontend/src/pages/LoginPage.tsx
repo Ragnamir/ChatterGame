@@ -2,7 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../session/SessionProvider';
 import { translate } from '../i18n/ru';
-import { validateLogin, type FieldErrors } from '../lib/validation';
+import { authApi } from '../api/endpoints';
+import { validateEmail, validateLogin, type FieldErrors } from '../lib/validation';
 import { Notice, describeError } from '../components/Notice';
 
 export function LoginPage() {
@@ -13,6 +14,11 @@ export function LoginPage() {
   const [errors, setErrors] = useState<FieldErrors<'login' | 'password'>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetError, setResetError] = useState<ReturnType<typeof validateEmail>>(null);
+  const [resetSent, setResetSent] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
 
   if (status === 'authenticated') {
     const from = (location.state as { from?: string } | null)?.from ?? '/games';
@@ -35,6 +41,24 @@ export function LoginPage() {
       setFailure(describeError(error));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onRequestReset(event: FormEvent) {
+    event.preventDefault();
+    const found = validateEmail(resetEmail);
+    setResetError(found);
+    if (found) {
+      return;
+    }
+    setResetBusy(true);
+    try {
+      await authApi.requestPasswordReset(resetEmail.trim());
+      setResetSent(true);
+    } catch (error) {
+      setFailure(describeError(error));
+    } finally {
+      setResetBusy(false);
     }
   }
 
@@ -85,6 +109,54 @@ export function LoginPage() {
             {busy ? translate('login.submitting') : translate('login.submit')}
           </button>
         </form>
+        {forgot ? (
+          <form className="form" noValidate onSubmit={(event) => void onRequestReset(event)}>
+            <p className="panel__hint">{translate('login.resetHint')}</p>
+            <div className="field">
+              <label htmlFor="login-reset-email">{translate('login.resetEmailLabel')}</label>
+              <input
+                id="login-reset-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                maxLength={320}
+                value={resetEmail}
+                aria-invalid={resetError ? true : undefined}
+                aria-describedby={resetError ? 'login-reset-email-error' : undefined}
+                onChange={(event) => setResetEmail(event.target.value)}
+              />
+              {resetError ? (
+                <p className="field__error" id="login-reset-email-error">
+                  {translate(resetError)}
+                </p>
+              ) : null}
+            </div>
+            {resetSent ? (
+              <div className="notice notice--ok" role="status">
+                <p className="notice__title">{translate('login.resetSent')}</p>
+              </div>
+            ) : (
+              <button className="button button--primary" type="submit" disabled={resetBusy}>
+                {resetBusy ? translate('login.resetSubmitting') : translate('login.resetSubmit')}
+              </button>
+            )}
+            <button
+              className="button button--ghost"
+              type="button"
+              onClick={() => {
+                setForgot(false);
+                setResetSent(false);
+                setResetError(null);
+              }}
+            >
+              {translate('login.resetBack')}
+            </button>
+          </form>
+        ) : (
+          <button className="button button--link" type="button" onClick={() => setForgot(true)}>
+            {translate('login.forgot')}
+          </button>
+        )}
         <p className="form__footer">
           {translate('login.noAccount')} <Link to="/register">{translate('login.toRegister')}</Link>
         </p>

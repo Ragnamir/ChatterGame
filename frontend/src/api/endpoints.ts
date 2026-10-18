@@ -32,6 +32,11 @@ export const authApi = {
   login: (input: LoginInput): Promise<UserProfile> => api.post('/auth/login', input),
   register: (input: RegisterInput): Promise<UserProfile> => api.post('/auth/register', input),
   logout: (): Promise<void> => api.post('/auth/logout'),
+  /** Ссылку подтверждения открывают из почтового клиента, cookie может отсутствовать (`D-141`). */
+  verifyEmail: (token: string): Promise<void> => api.post('/auth/verify-email', { token }),
+  requestPasswordReset: (email: string): Promise<void> => api.post('/me/password/reset', { email }),
+  confirmPasswordReset: (token: string, password: string): Promise<void> =>
+    api.post('/me/password/reset/confirm', { token, password }),
 };
 
 export const gamesApi = {
@@ -41,6 +46,7 @@ export const gamesApi = {
 
 export const profileApi = {
   update: (input: UpdateProfileInput): Promise<UserProfile> => api.patch('/me', input),
+  resendEmailVerification: (): Promise<void> => api.post('/me/email/verification'),
 };
 
 export const roomApi = {

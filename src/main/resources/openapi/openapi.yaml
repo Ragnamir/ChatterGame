@@ -2338,6 +2338,23 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UserProfile' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/verify-email:
+    post:
+      summary: Подтверждение адреса почты по ссылке из письма
+      description: |
+        Без аутентификации: ссылку открывают из почтового клиента (`D-141`). Ответ
+        одинаков для истёкшей, использованной и чужой ссылки (`D-079`).
+      operationId: verifyEmail
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyEmailRequest' }
+      responses:
+        '204':
+          description: Адрес подтверждён
+        '400': { $ref: '#/components/responses/BadRequest' }
   /auth/logout:
     post:
       summary: Выход на текущем устройстве
@@ -2412,6 +2429,22 @@ paths:
           headers:
             Set-Cookie: { $ref: '#/components/headers/SessionCookie' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+  /me/email/verification:
+    post:
+      summary: Повторное письмо подтверждения адреса
+      description: |
+        Лимит по человеку и клиенту, как у сброса пароля (`D-079`, `D-141`).
+      operationId: resendEmailVerification
+      tags: [profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '202':
+          description: Письмо отправлено
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /me/password:
     post:
       summary: Смена пароля
@@ -2647,6 +2680,11 @@ components:
         password: { type: string, minLength: 8, maxLength: 128 }
         displayName: { type: [string, 'null'], maxLength: 128 }
         email: { type: [string, 'null'], maxLength: 320 }
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, maxLength: 128 }
     LoginRequest:
       type: object
       required: [login, password]

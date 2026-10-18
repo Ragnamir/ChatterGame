@@ -46,6 +46,20 @@ export function validateRegister(fields: RegisterFields): FieldErrors<keyof Regi
   return errors;
 }
 
+export function validateEmail(email: string): MessageKey | null {
+  if (email.trim() === '') {
+    return 'validation.emailRequired';
+  }
+  return EMAIL.test(email.trim()) ? null : 'validation.emailInvalid';
+}
+
+export function validateNewPassword(password: string): MessageKey | null {
+  if (password === '') {
+    return 'validation.passwordRequired';
+  }
+  return password.length < 8 ? 'validation.passwordTooShort' : null;
+}
+
 /**
  * Пустая строка у необязательного поля означает «нет значения», а не «пустое имя»:
  * сервер хранит `null`, иначе `PATCH` с пустым полем затирал бы имя на пробел.

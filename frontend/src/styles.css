@@ -290,6 +290,19 @@ input[aria-invalid='true'] {
   color: var(--ink);
 }
 
+.button--link {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font-weight: 500;
+  text-decoration: underline;
+}
+
+.button--link:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
 .button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -300,6 +313,12 @@ input[aria-invalid='true'] {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.profile-verification {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
 }
 
 .form__footer {

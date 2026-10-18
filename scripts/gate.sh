@@ -1023,6 +1023,95 @@ case "$stage" in
     fi
     ;;
 
+  O01)
+    # `PLAN O01`: почта — подтверждение и сброс. Проверки привязаны к `D-079` и
+    # `D-141…D-144`: хеш вместо токена, привязка ссылки к адресу, одинаковый ответ,
+    # падение прода без SMTP и чек-лист DNS.
+    if [ -f src/main/resources/db/changelog/changes/011-o01.yaml ] \
+      && grep -q '011-o01.yaml' src/main/resources/db/changelog/db.changelog-master.yaml; then
+      echo "  ok: O01 — миграция токена подтверждения подключена"
+    else
+      fail=1
+      echo "FAIL: O01 требует changes/011-o01.yaml в changelog"
+    fi
+    if grep -q '011-o01.yaml' src/main/resources/contract/changelog-manifest.txt; then
+      echo "  ok: O01 — отпечаток миграции внесён в манифест"
+    else
+      fail=1
+      echo "FAIL: O01 требует отпечаток 011-o01.yaml в changelog-manifest.txt"
+    fi
+    # В БД лежит хеш, а не токен (`D-079`, `D-141`): иначе ссылка из письма читается из дампа.
+    if grep -q 'token_hash' src/main/java/com/chattergame/user/EmailVerificationTokenRepository.java \
+      && grep -q 'Tokens.hash' src/main/java/com/chattergame/user/EmailVerificationTokens.java; then
+      echo "  ok: O01 — токен подтверждения хранится хешем (D-141)"
+    else
+      fail=1
+      echo "FAIL: O01 требует хеш токена подтверждения (D-141)"
+    fi
+    # Ссылка адресована конкретному адресу: письмо на прежний адрес не подтверждает новый.
+    if grep -q 'email_verification_token' src/main/resources/db/changelog/changes/011-o01.yaml \
+      && grep -q 'stored.email().equals(user.email())' src/main/java/com/chattergame/user/EmailVerificationTokens.java; then
+      echo "  ok: O01 — подтверждение привязано к адресу (D-141)"
+    else
+      fail=1
+      echo "FAIL: O01 требует привязки подтверждения к адресу (D-141)"
+    fi
+    # Сброс отвечает одинаково на существующий и несуществующий адрес (`D-079`).
+    if grep -q 'findByEmail(email)' src/main/java/com/chattergame/user/PasswordResetService.java \
+      && ! grep -q 'notFound' src/main/java/com/chattergame/user/PasswordResetService.java; then
+      echo "  ok: O01 — сброс не различает адреса по ответу (D-079)"
+    else
+      fail=1
+      echo "FAIL: O01 требует анти-enumeration в сбросе пароля (D-079)"
+    fi
+    # Отправка идёт через один узел со счётчиками, без адреса и токена в логах (`D-143`).
+    if grep -q 'class MailDelivery' src/main/java/com/chattergame/user/MailDelivery.java \
+      && grep -q 'stats()' src/main/java/com/chattergame/user/MailDelivery.java \
+      && ! grep -q 'log\.info(.*email' src/main/java/com/chattergame/user/MailDelivery.java; then
+      echo "  ok: O01 — доставка считается по виду письма (D-143)"
+    else
+      fail=1
+      echo "FAIL: O01 требует счётчиков доставки без адресов в логах (D-143)"
+    fi
+    # Прод без SMTP и без абсолютной ссылки не стартует (`D-079`, `D-142`).
+    if grep -q 'spring.mail.host' src/main/java/com/chattergame/user/MailConfiguration.java \
+      && grep -q 'chattergame.mail.link-base' src/main/java/com/chattergame/user/MailConfiguration.java; then
+      echo "  ok: O01 — прод требует SMTP и публичный адрес (D-079, D-142)"
+    else
+      fail=1
+      echo "FAIL: O01 требует падения прода без SMTP и публичного адреса"
+    fi
+    # Чек-лист DNS и порядок приёмки живут в документации, а не в голове оператора.
+    if grep -q 'v=spf1' docs/OPS/email.md \
+      && grep -q '_domainkey' docs/OPS/email.md \
+      && grep -q 'v=DMARC1' docs/OPS/email.md \
+      && grep -q 'mail-tester.com' docs/OPS/email.md; then
+      echo "  ok: O01 — чек-лист SPF/DKIM/DMARC записан"
+    else
+      fail=1
+      echo "FAIL: O01 требует чек-лист SPF/DKIM/DMARC в docs/OPS/email.md"
+    fi
+    if [ -f frontend/tests/O01AuthMail.test.ts ] \
+      && (cd frontend && node --test tests/O01AuthMail.test.ts); then
+      echo "  ok: O01 — тесты форм входа и сброса пройдены"
+    else
+      fail=1
+      echo "FAIL: O01 — тесты форм входа и сброса провалены"
+    fi
+    if (cd frontend && npm run --silent check:i18n && npm run --silent check:a11y); then
+      echo "  ok: O01 — словарь и доступность"
+    else
+      fail=1
+      echo "FAIL: O01 — нарушены словарь или доступность"
+    fi
+    if (cd frontend && npm run --silent build); then
+      echo "  ok: O01 — прод-сборка собрана"
+    else
+      fail=1
+      echo "FAIL: O01 — прод-сборка не собрана"
+    fi
+    ;;
+
   *)
     echo "  ok: stage_checks $stage — проверки живут в тестах этапа"
     ;;

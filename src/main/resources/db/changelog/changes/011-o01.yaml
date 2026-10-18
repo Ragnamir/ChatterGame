@@ -1,0 +1,44 @@
+databaseChangeLog:
+  # O01: подтверждение адреса почты.
+  #
+  # Применённые `001`…`010` не редактируются никогда (`AGENTS §1`).
+  #
+  # `app_user.email_verified_at` и `auth_identity.verified_at` заведены в baseline (`E02`),
+  # но подтверждать адрес было нечем: токена не существовало, и в `prod` подтверждение
+  # оставалось недостижимым. Таблица хранит хеш токена, а не токен (`D-079`, `D-141`):
+  # ссылка из письма бесполезна для того, кто прочитал дамп.
+  #
+  # Адрес лежит в самой строке токена, а не читается из профиля при проверке (`D-141`):
+  # иначе письмо, ушедшее на прежний адрес, подтверждало бы новый.
+
+  - changeSet:
+      id: 011-01-email-verification-token
+      author: o01
+      changes:
+        - createTable:
+            tableName: email_verification_token
+            columns:
+              - column: { name: id, type: uuid, constraints: { primaryKey: true, primaryKeyName: pk_email_verification_token } }
+              - column: { name: user_id, type: uuid, constraints: { nullable: false } }
+              - column: { name: token_hash, type: varchar(64), constraints: { nullable: false } }
+              - column: { name: email, type: varchar(320), constraints: { nullable: false } }
+              - column: { name: created_at, type: timestamptz, defaultValueComputed: now(), constraints: { nullable: false } }
+              - column: { name: expires_at, type: timestamptz, constraints: { nullable: false } }
+              - column: { name: used_at, type: timestamptz }
+        - addForeignKeyConstraint:
+            baseTableName: email_verification_token
+            baseColumnNames: user_id
+            referencedTableName: app_user
+            referencedColumnNames: id
+            constraintName: fk_email_verification_token_user
+        - createIndex:
+            tableName: email_verification_token
+            indexName: ux_email_verification_token_hash
+            unique: true
+            columns:
+              - column: { name: token_hash }
+        - createIndex:
+            tableName: email_verification_token
+            indexName: ix_email_verification_token_user
+            columns:
+              - column: { name: user_id }

@@ -2,6 +2,7 @@ package com.chattergame.web.user;
 
 import com.chattergame.user.AppUser;
 import com.chattergame.user.AuthenticationService;
+import com.chattergame.user.EmailVerificationService;
 import com.chattergame.user.RegistrationService;
 import com.chattergame.user.SessionCookie;
 import com.chattergame.user.SessionService;
@@ -32,16 +33,19 @@ public class AuthController {
     private final AuthenticationService authentication;
     private final SessionService sessions;
     private final SessionCookie cookie;
+    private final EmailVerificationService verification;
 
     public AuthController(
             RegistrationService registration,
             AuthenticationService authentication,
             SessionService sessions,
-            SessionCookie cookie) {
+            SessionCookie cookie,
+            EmailVerificationService verification) {
         this.registration = registration;
         this.authentication = authentication;
         this.sessions = sessions;
         this.cookie = cookie;
+        this.verification = verification;
     }
 
     @PostMapping("/register")
@@ -49,10 +53,24 @@ public class AuthController {
             @Valid @RequestBody RegisterRequest request, HttpServletRequest http) {
         AppUser user = registration.register(
                 request.login(), request.password(), request.displayName(), request.email());
+        // Письмо уходит после коммита регистрации: внешний вызов внутри транзакции запрещён
+        // (`D-044`), а отказ доставки не должен отменять уже созданный аккаунт.
+        verification.sendIfUnverified(user.id());
         SessionService.IssuedSession session = sessions.issue(user.id(), userAgent(http));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.SET_COOKIE, cookie.issue(session.token()).toString())
                 .body(UserProfile.of(user));
+    }
+
+    /**
+     * Подтверждение адреса по ссылке из письма. Без аутентификации: ссылку открывают из
+     * почтового клиента, где cookie может отсутствовать. Ответ одинаков для истёкшей,
+     * использованной и чужой ссылки (`D-079`).
+     */
+    @PostMapping("/verify-email")
+    public ResponseEntity<Void> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
+        verification.verify(request.token());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/login")

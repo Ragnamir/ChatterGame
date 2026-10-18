@@ -22,9 +22,26 @@ export function ProfilePage() {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [resendBusy, setResendBusy] = useState(false);
+  const [resendSent, setResendSent] = useState(false);
 
   if (!user) {
     return null;
+  }
+
+  async function onResend(event: FormEvent) {
+    event.preventDefault();
+    setResendBusy(true);
+    setResendSent(false);
+    try {
+      await profileApi.resendEmailVerification();
+      setResendSent(true);
+    } catch (error) {
+      setResendSent(false);
+      setFailure(describeError(error));
+    } finally {
+      setResendBusy(false);
+    }
   }
 
   async function onSubmit(event: FormEvent) {
@@ -112,6 +129,32 @@ export function ProfilePage() {
             <p className="field__hint" id="profile-email-hint">
               {translate('profile.emailHint')}
             </p>
+            {user.email ? (
+              <div className="profile-verification">
+                {user.emailVerified ? (
+                  <p className="field__hint">{translate('profile.emailVerified')}</p>
+                ) : (
+                  <>
+                    <p className="field__hint">{translate('profile.emailUnverified')}</p>
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      disabled={resendBusy}
+                      onClick={(event) => void onResend(event)}
+                    >
+                      {resendBusy
+                        ? translate('profile.emailVerificationSending')
+                        : translate('profile.emailVerificationResend')}
+                    </button>
+                    {resendSent ? (
+                      <p className="notice notice--ok" role="status">
+                        {translate('profile.emailVerificationSent')}
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
           <div className="field">
             <label htmlFor="profile-theme">{translate('profile.themeLabel')}</label>

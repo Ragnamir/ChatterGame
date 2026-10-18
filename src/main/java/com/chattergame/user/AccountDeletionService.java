@@ -30,6 +30,7 @@ public class AccountDeletionService {
     private final AuthIdentityRepository identities;
     private final UserSessionRepository sessions;
     private final PasswordResetTokenRepository resetTokens;
+    private final EmailVerificationTokenRepository verificationTokens;
     private final LlmCredentialService credentials;
     private final GameMutationService games;
     private final PasswordHasher passwordHasher;
@@ -39,6 +40,7 @@ public class AccountDeletionService {
             AuthIdentityRepository identities,
             UserSessionRepository sessions,
             PasswordResetTokenRepository resetTokens,
+            EmailVerificationTokenRepository verificationTokens,
             LlmCredentialService credentials,
             GameMutationService games,
             PasswordHasher passwordHasher) {
@@ -46,6 +48,7 @@ public class AccountDeletionService {
         this.identities = identities;
         this.sessions = sessions;
         this.resetTokens = resetTokens;
+        this.verificationTokens = verificationTokens;
         this.credentials = credentials;
         this.games = games;
         this.passwordHasher = passwordHasher;
@@ -74,6 +77,7 @@ public class AccountDeletionService {
 
         sessions.deleteAllForUser(userId);
         resetTokens.deleteAllForUser(userId);
+        verificationTokens.deleteAllForUser(userId);
         credentials.deleteAllForUser(userId);
     }
 }

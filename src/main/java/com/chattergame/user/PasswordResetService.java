@@ -1,5 +1,6 @@
 package com.chattergame.user;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -17,22 +18,24 @@ public class PasswordResetService {
     private static final int REQUESTS_PER_EMAIL = 3;
     private static final int REQUESTS_PER_CLIENT = 10;
     private static final Duration WINDOW = Duration.ofMinutes(15);
-    private static final String SUBJECT = "Сброс пароля ChatterGame";
 
     private final AppUserRepository users;
     private final PasswordService passwords;
     private final RateLimiter rateLimiter;
-    private final MailSender mailSender;
+    private final MailDelivery mail;
+    private final String linkBase;
 
     public PasswordResetService(
             AppUserRepository users,
             PasswordService passwords,
             RateLimiter rateLimiter,
-            MailSender mailSender) {
+            MailDelivery mail,
+            @Value("${chattergame.mail.link-base:http://localhost:5173}") String linkBase) {
         this.users = users;
         this.passwords = passwords;
         this.rateLimiter = rateLimiter;
-        this.mailSender = mailSender;
+        this.mail = mail;
+        this.linkBase = linkBase;
     }
 
     /**
@@ -40,6 +43,9 @@ public class PasswordResetService {
      * превращается в бесплатную проверку «зарегистрирован ли Вася». Ограничение частоты
      * считается по одним и тем же ключам в обоих случаях, поэтому по нему тоже нельзя
      * различить адреса.
+     *
+     * <p>Отказ доставки не меняет ответ: иначе по коду ошибки стало бы видно, что адрес
+     * существует, — ровно то, что запрещает `D-079`.
      */
     public void requestReset(String rawEmail, String clientIp) {
         if (rawEmail == null || rawEmail.isBlank()) {
@@ -53,15 +59,13 @@ public class PasswordResetService {
         users.findByEmail(email)
                 .filter(AppUser::isActive)
                 .flatMap(user -> passwords.issueResetToken(user.id()))
-                .ifPresent(token -> mailSender.send(email, SUBJECT, body(token)));
+                .ifPresent(token -> mail.send(
+                        "password_reset",
+                        email,
+                        MailTemplates.passwordReset(linkBase + "/reset-password?token=" + token)));
     }
 
     public void confirm(String token, String newPassword) {
         passwords.resetPassword(token, newPassword);
-    }
-
-    private static String body(String token) {
-        return "Чтобы задать новый пароль, откройте ссылку:\n\n/reset-password?token=" + token
-                + "\n\nЕсли вы не запрашивали сброс, ничего делать не нужно.";
     }
 }
